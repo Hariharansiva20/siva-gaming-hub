@@ -421,7 +421,7 @@
   }
   .td-hud{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:8px}
   .td-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
-  .td-info{text-align:center;color:var(--muted);font-size:.85rem;margin-top:10px;min-height:20px;padding:0 8px}
+  .td-info{text-align:center;color:var(--muted);font-size:.85rem;margin-top:10px;min-height:52px;padding:0 8px;line-height:1.35}
   .btn:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
 
   .pz-board{
@@ -901,7 +901,7 @@ const GAMES = [
   { id: 'bike', title: '3D Bike Racing', cat: 'Racing', icon: '🏍️',
     desc: 'Lean through neon traffic, grab ⚡ nitro bolts and blast past rivals.' },
   { id: 'td', title: 'Tower Defense', cat: 'Strategy', icon: '🏰',
-    desc: 'Build and upgrade cannon, frost and laser towers to stop 10 waves of invaders.' },
+    desc: 'Build Archer, Cannon and Magic towers, upgrade them to level 5 and stop 10 waves of invaders.' },
   { id: 'puzzle', title: 'Sliding Number Puzzle', cat: 'Puzzle', icon: '🔢',
     desc: 'Slide the tiles into order 1–8 in as few moves and as little time as you can.' },
 ];
@@ -3321,25 +3321,27 @@ function createBike() {
 
 
 /* ============================================================
-   GAME 7 (NEW): TOWER DEFENSE  (Strategy)
-   16x12 grid. Enemies walk a winding path. Build & upgrade towers.
-   10 waves, coins from kills, lives lost when enemies escape.
+   GAME 7: TOWER DEFENSE  (Strategy)  — v5 upgrade
+   16x12 grid. Enemies walk a winding path to your core.
+   Towers: Archer (fast, multishot), Cannon (splash), Magic (aura slow).
+   5 upgrade levels per tower, 5 enemy types, 10 escalating waves.
    ============================================================ */
 function createTowerDefense() {
   const id = 'td';
-  setFoot('Pick a tower (1/2/3), tap an empty tile to build it, or tap a tower to select it, then ⬆ Upgrade or 💲 Sell. ▶ Start Wave to send enemies. Clear all 10 waves to win. PC: P pause · U upgrade · X sell · Space start wave.');
+  setFoot('Choose a tower (1 Cannon · 2 Archer · 3 Magic) and tap an empty tile to build it. On touch screens tap once to preview, then tap again to build. Tap a tower to select it, then ⬆ Upgrade (up to level 5) or 💲 Sell. ▶ Start Wave sends enemies. Clear all 10 waves to win. PC: P pause · U upgrade · X sell · Esc cancel · Space start wave.');
   $('#stage').innerHTML = `
     <div class="game-stage" id="tdWrap" style="position:relative">
       <div class="td-hud">
         <span class="score-pill">💰 <b id="tdCoins">0</b></span>
         <span class="score-pill">❤ <b id="tdLives">0</b></span>
         <span class="score-pill">🌊 Wave <b id="tdWave">0</b> / <span id="tdTotal">10</span></span>
+        <span class="score-pill">⭐ <b id="tdScore">0</b></span>
       </div>
       <canvas class="game-canvas" id="tdCanvas" width="640" height="480"></canvas>
       <div class="td-row">
-        <button class="chip active" data-t="cannon">🔫 Cannon · 25</button>
-        <button class="chip" data-t="frost">❄ Frost · 35</button>
-        <button class="chip" data-t="laser">⚡ Laser · 50</button>
+        <button class="chip" data-t="cannon">💣 Cannon · 25</button>
+        <button class="chip" data-t="archer">🏹 Archer · 50</button>
+        <button class="chip" data-t="magic">🔮 Magic · 35</button>
       </div>
       <div class="td-row">
         <button class="btn small" id="tdStart">▶ Start Wave</button>
@@ -3357,22 +3359,26 @@ function createTowerDefense() {
   cv.width = W * DPR;
   cv.height = H * DPR;
 
-  const WAYPOINTS = [[-1, 2], [4, 2], [4, 9], [10, 9], [10, 4], [14, 4], [14, 10], [17, 10]];
-  const TOTAL_WAVES = 10;
+  const WAYPOINTS = [[-1, 2], [4, 2], [4, 9], [10, 9], [10, 4], [14, 4], [14, 10], [15, 10]];
+  const CORE = { c: 15, r: 10 };
+  const TOTAL_WAVES = 10, MAX_LVL = 5;
   const START_COINS = 120, START_LIVES = 20;
+  const BOSS_WAVES = [5, 8, 10];
+
   const TOWER_DEF = {
-    cannon: { name: 'Cannon', cost: 25, range: 110, dmg: 12, cd: 0.8, color: '#00c8ff' },
-    frost:  { name: 'Frost',  cost: 35, range: 95,  dmg: 3,  cd: 1.0, color: '#9ef0ff' },
-    laser:  { name: 'Laser',  cost: 50, range: 170, dmg: 7,  cd: 0.35, color: '#ff2e7e' },
+    cannon: { name: 'Cannon', cost: 25, range: 105, dmg: 14, cd: 1.1, splash: 42, color: '#ff7a1a' },
+    archer: { name: 'Archer', cost: 50, range: 150, dmg: 8,  cd: 0.45, color: '#7dff6a' },
+    magic:  { name: 'Magic',  cost: 35, range: 100, dmg: 4,  cd: 1.0,  color: '#b026ff' },
   };
   const ENEMY_DEF = {
-    grunt:  { hp: 30,  speed: 42, reward: 6,  color: '#7dff6a', r: 9,  lives: 1 },
-    runner: { hp: 18,  speed: 82, reward: 7,  color: '#ffe14d', r: 7,  lives: 1 },
-    tank:   { hp: 120, speed: 26, reward: 15, color: '#ff7a1a', r: 12, lives: 1 },
-    boss:   { hp: 600, speed: 20, reward: 80, color: '#b026ff', r: 16, lives: 3 },
+    grunt:  { name: 'Grunt',  hp: 30,  speed: 42, reward: 6,  color: '#7dff6a', r: 9,  lives: 1, armor: 0 },
+    runner: { name: 'Runner', hp: 18,  speed: 82, reward: 7,  color: '#ffe14d', r: 7,  lives: 1, armor: 0 },
+    ghost:  { name: 'Ghost',  hp: 24,  speed: 58, reward: 9,  color: '#9ef0ff', r: 9,  lives: 1, armor: 0 },
+    tank:   { name: 'Tank',   hp: 120, speed: 26, reward: 15, color: '#ff7a1a', r: 12, lives: 1, armor: 0.15 },
+    boss:   { name: 'Boss',   hp: 600, speed: 20, reward: 80, color: '#b026ff', r: 17, lives: 3, armor: 0.1 },
   };
 
-  // ----- Path geometry (axis-aligned segments) -----
+  // ----- Path geometry -----
   const segs = [];
   let pathLen = 0;
   for (let i = 0; i < WAYPOINTS.length - 1; i++) {
@@ -3401,77 +3407,246 @@ function createTowerDefense() {
     return WAYPOINTS[WAYPOINTS.length - 1];
   }
 
+  // ----- Helpers -----
+  const hexRgb = h => {
+    const n = parseInt(h.slice(1), 16);
+    return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+  };
+  const glowCache = {};
+  const glowFor = hex => glowCache[hex] || (glowCache[hex] = glowSprite(hexRgb(hex), 64));
+  const inGrid = (c, r) => c >= 0 && r >= 0 && c < COLS && r < ROWS;
+  const isPath = (c, r) => pathTiles.has(r * COLS + c);
+
+  function seeded(seed) {
+    let s = seed;
+    return () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  }
+
+  // ----- Pre-rendered battlefield (drawn once, blitted every frame) -----
+  const bgCv = (() => {
+    const c = document.createElement('canvas');
+    c.width = W * DPR;
+    c.height = H * DPR;
+    const g = c.getContext('2d');
+    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const R = seeded(7);
+
+    const base = g.createLinearGradient(0, 0, W, H);
+    base.addColorStop(0, '#070418');
+    base.addColorStop(1, '#100733');
+    g.fillStyle = base;
+    g.fillRect(0, 0, W, H);
+
+    for (let r = 0; r < ROWS; r++) {
+      for (let c2 = 0; c2 < COLS; c2++) {
+        const x = c2 * T, y = r * T;
+        if (isPath(c2, r)) {
+          g.fillStyle = '#1d0e3e';
+          g.fillRect(x, y, T, T);
+          for (let k = 0; k < 6; k++) {
+            g.fillStyle = `rgba(${60 + R() * 40 | 0},${30 + R() * 20 | 0},${100 + R() * 40 | 0},0.35)`;
+            const sx = x + R() * (T - 10), sy = y + R() * (T - 10);
+            g.beginPath();
+            g.roundRect ? g.roundRect(sx, sy, 6 + R() * 5, 4 + R() * 4, 2) : g.rect(sx, sy, 8, 6);
+            g.fill();
+          }
+        } else {
+          g.fillStyle = (c2 + r) % 2 ? '#0c0729' : '#0a0522';
+          g.fillRect(x, y, T, T);
+          for (let k = 0; k < 4; k++) {
+            g.fillStyle = `rgba(0,200,255,${(0.05 + R() * 0.07).toFixed(3)})`;
+            g.fillRect(x + R() * T, y + R() * T, 1.5, 1.5);
+          }
+        }
+      }
+    }
+
+    // Path glow + dashed centre line
+    g.lineJoin = 'round';
+    g.strokeStyle = 'rgba(176,38,255,0.14)';
+    g.lineWidth = T * 0.95;
+    g.beginPath();
+    WAYPOINTS.forEach(([x, y], i) => {
+      const px = (x + 0.5) * T, py = (y + 0.5) * T;
+      if (i) g.lineTo(px, py); else g.moveTo(px, py);
+    });
+    g.stroke();
+    g.strokeStyle = 'rgba(0,200,255,0.3)';
+    g.lineWidth = 2;
+    g.setLineDash([8, 8]);
+    g.stroke();
+    g.setLineDash([]);
+
+    // Crystal decorations on buildable tiles
+    for (let k = 0; k < 26; k++) {
+      const c2 = Math.floor(R() * COLS), r = Math.floor(R() * ROWS);
+      if (isPath(c2, r) || (c2 === CORE.c && r === CORE.r)) continue;
+      const cx = c2 * T + 4 + R() * (T - 8), cy = r * T + 4 + R() * (T - 8);
+      const col = R() < 0.5 ? '0,200,255' : '176,38,255';
+      g.fillStyle = `rgba(${col},0.55)`;
+      g.beginPath();
+      g.moveTo(cx, cy - 5); g.lineTo(cx + 3, cy); g.lineTo(cx, cy + 4); g.lineTo(cx - 3, cy);
+      g.closePath(); g.fill();
+    }
+
+    g.strokeStyle = 'rgba(176,38,255,0.12)';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let c2 = 0; c2 <= COLS; c2++) { g.moveTo(c2 * T + 0.5, 0); g.lineTo(c2 * T + 0.5, H); }
+    for (let r = 0; r <= ROWS; r++) { g.moveTo(0, r * T + 0.5); g.lineTo(W, r * T + 0.5); }
+    g.stroke();
+    return c;
+  })();
+
   // ----- State -----
-  let state = 'build';           // build | wave | won | lost
-  let coins, lives, wave, kills, cleared;
-  let towers, enemies, queue, spawnT, beams, pops;
-  let selected = null, selType = 'cannon', hover = null, paused = false;
+  let state = 'build';             // build | wave | won | lost
+  let coins, lives, wave, kills, cleared, earned;
+  let towers, enemies, queue, spawnT, projs, parts, rings, pops;
+  let sel = null, selType = 'cannon', hover = null, pending = null, paused = false;
+  let banner = null, shake = 0, coreHit = 0, soundCd = 0, time = 0;
   let overlayEl = null, raf = 0, last = 0, destroyed = false;
   const chipEls = $$('#tdWrap [data-t]');
 
   function info(t) { $('#tdInfo').textContent = t; }
-
   function towerAt(c, r) { return towers.find(t => t.c === c && t.r === r); }
+  function liveScore() { return kills * 10 + cleared * 50; }
 
   function statsOf(tw) {
-    const b = TOWER_DEF[tw.type];
-    const L = tw.lvl - 1;
-    return { dmg: b.dmg * (1 + 0.5 * L), range: b.range * (1 + 0.1 * L), cd: b.cd * (1 - 0.08 * L) };
+    const b = TOWER_DEF[tw.type], L = tw.lvl - 1;
+    const st = {
+      dmg: b.dmg * (1 + 0.3 * L),
+      range: b.range * (1 + 0.08 * L),
+      cd: b.cd * (1 - 0.06 * L),
+      splash: b.splash ? b.splash * (1 + 0.15 * L) : 0,
+      shots: 1,
+      slowDur: 1.4 + 0.2 * L,
+      slowMul: Math.max(0.3, 0.5 - 0.04 * L),
+    };
+    if (tw.type === 'archer') st.shots = tw.lvl >= 5 ? 3 : tw.lvl >= 3 ? 2 : 1;
+    return st;
   }
 
-  function inRange(tw, e, range) {
-    return Math.hypot(e.px - tw.x, e.py - tw.y) <= range;
+  function upgradeCost(tw) { return Math.round(TOWER_DEF[tw.type].cost * 0.8 * tw.lvl); }
+
+  function inRangeOf(x, y, e, range) { return Math.hypot(e.px - x, e.py - y) <= range; }
+
+  function targetsFor(x, y, range, n) {
+    return enemies
+      .filter(e => !e.dead && inRangeOf(x, y, e, range))
+      .sort((a, b) => b.s - a.s)
+      .slice(0, n);
   }
 
-  function pickTarget(tw, range) {
-    let best = null;
-    for (const e of enemies) {
-      if (e.dead || !inRange(tw, e, range)) continue;
-      if (!best || e.s > best.s) best = e;
-    }
-    return best;
-  }
-
+  // ----- Waves -----
   function buildQueue(w) {
+    const pool = ['grunt', 'grunt'];
+    if (w >= 2) pool.push('runner', 'runner');
+    if (w >= 3) pool.push('ghost');
+    if (w >= 4) pool.push('tank');
+    if (w >= 7) pool.push('tank', 'ghost');
+    const n = 6 + w * 2 + Math.floor(w / 3);
     const q = [];
-    const n = 6 + w * 2;
-    for (let i = 0; i < n; i++) {
-      const r = Math.random();
-      let t = 'grunt';
-      if (w >= 4 && r < 0.2) t = 'tank';
-      else if (w >= 2 && r < 0.45) t = 'runner';
-      q.push(t);
-    }
-    if (w === 5 || w === 10) q.push('boss');
+    for (let i = 0; i < n; i++) q.push(pool[Math.floor(Math.random() * pool.length)]);
+    if (BOSS_WAVES.includes(w)) q.push('boss');
     return q;
   }
 
   function spawnEnemy(type) {
     const def = ENEMY_DEF[type];
-    const mult = 1 + 0.12 * (wave - 1);
+    const hpMul = 1 + 0.15 * (wave - 1);
+    const spMul = Math.min(1.3, 1 + 0.02 * (wave - 1));
+    const hp = def.hp * hpMul;
     const [sx, sy] = posAt(0);
     enemies.push({
-      type, s: 0, hp: def.hp * mult, maxHp: def.hp * mult, slow: 0, dead: false,
-      px: (sx + 0.5) * T, py: (sy + 0.5) * T,
+      type, s: 0, hp, maxHp: hp, speed: def.speed * spMul,
+      slow: 0, slowMul: 0.5, flash: 0, dead: false,
+      px: (sx + 0.5) * T, py: (sy + 0.5) * T, ang: 0, ph: Math.random() * TWO_PI,
     });
   }
 
-  function damage(e, dmg) {
-    if (e.dead) return;
-    e.hp -= dmg;
-    if (e.hp <= 0) {
-      e.dead = true;
-      kills++;
-      const r = ENEMY_DEF[e.type].reward;
-      coins += r;
-      pops.push({ x: e.px, y: e.py - 14, text: '+' + r, life: 1 });
-      Sound.click();
+  // ----- Effects -----
+  function burstAt(x, y, color, n) {
+    for (let i = 0; i < n && parts.length < 420; i++) {
+      const a = Math.random() * TWO_PI, sp = 40 + Math.random() * 120;
+      parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 30, life: 1, color, size: 2 + Math.random() * 2.5 });
     }
+  }
+  function ringFx(x, y, max, color) { rings.push({ x, y, r: 6, max, life: 1, color }); }
+  function popText(x, y, text, color) { pops.push({ x, y, text, color, life: 1 }); }
+  function throttledSound(fn) {
+    if (soundCd <= 0) { fn(); soundCd = 0.08; }
+  }
+
+  // ----- Combat -----
+  function hurt(e, dmg) {
+    if (e.dead) return;
+    e.hp -= dmg * (1 - ENEMY_DEF[e.type].armor);
+    e.flash = 0.12;
+    if (e.hp <= 0) kill(e);
+  }
+
+  function kill(e) {
+    e.dead = true;
+    kills++;
+    const r = ENEMY_DEF[e.type].reward;
+    coins += r;
+    earned += r;
+    popText(e.px, e.py - 14, '+' + r, '#ffe14d');
+    burstAt(e.px, e.py, ENEMY_DEF[e.type].color, e.type === 'boss' ? 34 : 14);
+    throttledSound(() => Sound.click());
+  }
+
+  function fire(tw, e, st) {
+    const def = TOWER_DEF[tw.type];
+    tw.angle = Math.atan2(e.py - tw.y, e.px - tw.x);
+    tw.recoil = 1;
+    projs.push({
+      x: tw.x, y: tw.y, tx: e.px, ty: e.py, target: e,
+      type: tw.type, dmg: st.dmg, splash: st.splash, color: def.color,
+      speed: tw.type === 'cannon' ? 260 : 560, done: false, px: tw.x, py: tw.y,
+    });
+    burstAt(tw.x + Math.cos(tw.angle) * 16, tw.y + Math.sin(tw.angle) * 16, def.color, 3);
+    throttledSound(() => Sound.flip());
+  }
+
+  function impact(p) {
+    if (p.type === 'cannon') {
+      for (const e of enemies) {
+        if (e.dead) continue;
+        const d = Math.hypot(e.px - p.tx, e.py - p.ty);
+        if (d <= p.splash) hurt(e, e === p.target ? p.dmg : p.dmg * 0.6);
+      }
+      ringFx(p.tx, p.ty, p.splash, '#ff7a1a');
+      burstAt(p.tx, p.ty, '#ffb04d', 16);
+      shake = Math.max(shake, 3);
+      throttledSound(() => Sound.boom());
+    } else {
+      if (p.target && !p.target.dead) hurt(p.target, p.dmg);
+      burstAt(p.tx, p.ty, p.color, 6);
+    }
+  }
+
+  function updateProjectiles(dt) {
+    for (const p of projs) {
+      if (p.target && !p.target.dead) { p.tx = p.target.px; p.ty = p.target.py; }
+      const dx = p.tx - p.x, dy = p.ty - p.y, d = Math.hypot(dx, dy);
+      const step = p.speed * dt;
+      p.px = p.x; p.py = p.y;
+      if (d <= step + 3) {
+        p.x = p.tx; p.y = p.ty;
+        p.done = true;
+        impact(p);
+      } else {
+        p.x += dx / d * step;
+        p.y += dy / d * step;
+      }
+    }
+    projs = projs.filter(p => !p.done);
   }
 
   function finish(won) {
     state = won ? 'won' : 'lost';
-    const score = kills * 10 + cleared * 50 + (won ? lives * 10 : 0);
+    const score = liveScore() + (won ? lives * 10 : 0);
     finishRound(id, score);
     showOver(won, score);
     refresh();
@@ -3481,185 +3656,355 @@ function createTowerDefense() {
     cleared++;
     const bonus = 40 + wave * 10;
     coins += bonus;
+    earned += bonus;
     if (wave >= TOTAL_WAVES) { finish(true); return; }
     state = 'build';
-    info(`Wave ${wave} cleared! +${bonus} coins. Build or upgrade, then start the next wave.`);
+    info(`Wave ${wave} cleared! +${bonus} coins. Upgrade towers, then start wave ${wave + 1}.`);
     refresh();
   }
 
+  // ----- Simulation -----
   function update(dt) {
     if (state === 'wave' && queue.length) {
       spawnT -= dt;
       if (spawnT <= 0) {
         spawnEnemy(queue.shift());
-        spawnT = Math.max(0.4, 0.9 - wave * 0.04);
+        spawnT = Math.max(0.35, 0.9 - wave * 0.04);
       }
     }
 
     for (const e of enemies) {
       if (e.dead) continue;
       const d = ENEMY_DEF[e.type];
-      e.s += d.speed * (e.slow > 0 ? 0.5 : 1) * dt / T;
+      const mul = e.slow > 0 ? e.slowMul : 1;
       if (e.slow > 0) e.slow -= dt;
+      e.s += e.speed * mul * dt / T;
+      e.flash = Math.max(0, e.flash - dt);
+      e.ph += dt * (e.type === 'runner' ? 14 : 8);
       if (e.s >= pathLen) {
         e.dead = true;
         lives -= d.lives;
+        coreHit = 1;
+        shake = 12;
+        burstAt((CORE.c + 0.5) * T, (CORE.r + 0.5) * T, '#ff2e7e', 18);
         Sound.bad();
         continue;
       }
       const [tx, ty] = posAt(e.s);
+      const [nx, ny] = posAt(e.s + 0.12);
       e.px = (tx + 0.5) * T;
       e.py = (ty + 0.5) * T;
+      e.ang = Math.atan2(ny - ty, nx - tx);
     }
 
     for (const tw of towers) {
       tw.cd -= dt;
-      tw.pulse = Math.max(0, tw.pulse - dt * 2);
+      tw.recoil = Math.max(0, (tw.recoil || 0) - dt * 6);
+      tw.pulse = Math.max(0, (tw.pulse || 0) - dt * 2.5);
       if (tw.cd > 0) continue;
       const st = statsOf(tw);
-      if (tw.type === 'frost') {
-        const near = enemies.filter(e => !e.dead && inRange(tw, e, st.range));
+      if (tw.type === 'magic') {
+        const near = enemies.filter(e => !e.dead && inRangeOf(tw.x, tw.y, e, st.range));
         if (near.length) {
           tw.cd = st.cd;
           tw.pulse = 1;
-          for (const e of near) { e.slow = 1.4; damage(e, st.dmg); }
+          ringFx(tw.x, tw.y, st.range, TOWER_DEF.magic.color);
+          for (const e of near) {
+            e.slow = st.slowDur;
+            e.slowMul = st.slowMul;
+            hurt(e, st.dmg);
+          }
         }
         continue;
       }
-      const target = pickTarget(tw, st.range);
-      if (!target) continue;
+      const list = targetsFor(tw.x, tw.y, st.range, st.shots);
+      if (!list.length) continue;
       tw.cd = st.cd;
-      tw.angle = Math.atan2(target.py - tw.y, target.px - tw.x);
-      beams.push({ x1: tw.x, y1: tw.y, x2: target.px, y2: target.py, color: TOWER_DEF[tw.type].color, life: 0.12 });
-      damage(target, st.dmg);
+      for (const e of list) fire(tw, e, st);
     }
 
-    for (const b of beams) b.life -= dt;
-    beams = beams.filter(b => b.life > 0);
-    for (const p of pops) { p.y -= dt * 30; p.life -= dt * 1.2; }
-    pops = pops.filter(p => p.life > 0);
+    updateProjectiles(dt);
     enemies = enemies.filter(e => !e.dead);
 
-    if (lives <= 0) { lives = 0; finish(false); refresh(); return; }
+    if (lives <= 0) { lives = 0; finish(false); return; }
     if (state === 'wave' && queue.length === 0 && enemies.length === 0) waveCleared();
   }
 
-  // ----- Drawing -----
-  function drawTower(tw, sel) {
+  function updateFx(dt) {
+    time += dt;
+    soundCd = Math.max(0, soundCd - dt);
+    for (const p of parts) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 180 * dt;
+      p.life -= dt * 1.7;
+    }
+    parts = parts.filter(p => p.life > 0);
+    for (const r of rings) {
+      r.r += (r.max - r.r) * Math.min(1, dt * 7);
+      r.life -= dt * 2.2;
+    }
+    rings = rings.filter(r => r.life > 0);
+    for (const p of pops) { p.y -= dt * 30; p.life -= dt * 1.2; }
+    pops = pops.filter(p => p.life > 0);
+    shake *= Math.exp(-dt * 8);
+    if (shake < 0.05) shake = 0;
+    coreHit = Math.max(0, coreHit - dt * 1.5);
+    if (banner) { banner.life -= dt * 0.6; if (banner.life <= 0) banner = null; }
+  }
+
+  // ----- Drawing: towers -----
+  function drawTowerBody(tw, alpha) {
     const def = TOWER_DEF[tw.type];
+    const x = tw.x, y = tw.y, lvl = tw.lvl || 1;
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = 'rgba(0,0,0,.45)';
-    ctx.beginPath(); ctx.ellipse(tw.x, tw.y + 12, 14, 5, 0, 0, TWO_PI); ctx.fill();
-    if (tw.type === 'frost' && tw.pulse > 0) {
-      ctx.strokeStyle = `rgba(158,240,255,${(tw.pulse * 0.6).toFixed(3)})`;
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(tw.x, tw.y, statsOf(tw).range * (1 - tw.pulse * 0.3), 0, TWO_PI); ctx.stroke();
-    }
-    ctx.fillStyle = '#120828';
-    ctx.beginPath(); ctx.arc(tw.x, tw.y, 15, 0, TWO_PI); ctx.fill();
-    ctx.strokeStyle = def.color;
-    ctx.lineWidth = sel ? 3 : 2;
-    ctx.stroke();
-    if (tw.type === 'frost') {
-      ctx.fillStyle = def.color;
-      ctx.beginPath(); ctx.arc(tw.x, tw.y, 5, 0, TWO_PI); ctx.fill();
-    } else {
+    ctx.beginPath(); ctx.ellipse(x, y + 14, 14, 5, 0, 0, TWO_PI); ctx.fill();
+
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(glowFor(def.color), x - 20, y - 20, 40, 40);
+    ctx.globalCompositeOperation = 'source-over';
+
+    if (tw.type === 'cannon') {
+      const g = ctx.createRadialGradient(x - 3, y - 3, 2, x, y, 15);
+      g.addColorStop(0, '#4a3020');
+      g.addColorStop(1, '#1a0f08');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(x, y, 14, 0, TWO_PI); ctx.fill();
+      ctx.strokeStyle = def.color; ctx.lineWidth = 2; ctx.stroke();
       ctx.save();
-      ctx.translate(tw.x, tw.y);
-      ctx.rotate(tw.angle);
+      ctx.translate(x, y);
+      ctx.rotate(tw.angle || 0);
+      const back = (tw.recoil || 0) * 4;
+      ctx.fillStyle = '#2b2b38';
+      ctx.fillRect(-back, -4, 18 + lvl * 1.5, 8);
       ctx.fillStyle = def.color;
-      ctx.fillRect(0, -3, 16 + tw.lvl * 2, 6);
+      ctx.fillRect(16 + lvl * 1.5 - back, -5, 3, 10);
       ctx.restore();
-    }
-    for (let i = 0; i < tw.lvl; i++) {
+    } else if (tw.type === 'archer') {
+      ctx.fillStyle = '#3b2a18';
+      ctx.fillRect(x - 8, y - 10, 16, 20);
+      ctx.fillStyle = '#5c4426';
+      ctx.fillRect(x - 8, y - 2, 16, 2);
       ctx.fillStyle = def.color;
-      ctx.fillRect(tw.x - 8 + i * 6, tw.y + 17, 4, 4);
-    }
-  }
-
-  function drawEnemy(e) {
-    if (e.dead) return;
-    const d = ENEMY_DEF[e.type];
-    const r = d.r;
-    ctx.fillStyle = 'rgba(0,0,0,.4)';
-    ctx.beginPath(); ctx.ellipse(e.px, e.py + r * 0.8, r * 0.9, r * 0.35, 0, 0, TWO_PI); ctx.fill();
-    ctx.fillStyle = d.color;
-    ctx.beginPath(); ctx.arc(e.px, e.py, r, 0, TWO_PI); ctx.fill();
-    ctx.strokeStyle = e.slow > 0 ? '#9ef0ff' : '#eae6ff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    const bw = r * 2.4, frac = Math.max(0, e.hp / e.maxHp);
-    ctx.fillStyle = 'rgba(0,0,0,.6)';
-    ctx.fillRect(e.px - bw / 2, e.py - r - 8, bw, 4);
-    ctx.fillStyle = frac > 0.5 ? '#7dff6a' : frac > 0.25 ? '#ffe14d' : '#ff2e7e';
-    ctx.fillRect(e.px - bw / 2, e.py - r - 8, bw * frac, 4);
-  }
-
-  function render() {
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ctx.fillStyle = '#05030d';
-    ctx.fillRect(0, 0, W, H);
-
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        const onPath = pathTiles.has(r * COLS + c);
-        ctx.fillStyle = onPath ? '#1d0d3d' : ((c + r) % 2 ? '#0b0622' : '#0a0520');
-        ctx.fillRect(c * T, r * T, T, T);
+      ctx.beginPath();
+      ctx.moveTo(x - 11, y - 10); ctx.lineTo(x, y - 20); ctx.lineTo(x + 11, y - 10);
+      ctx.closePath(); ctx.fill();
+      if (lvl >= 5) {
+        ctx.strokeStyle = '#ffd54d'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x - 11, y - 10); ctx.lineTo(x, y - 20); ctx.lineTo(x + 11, y - 10); ctx.stroke();
+      }
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(tw.angle || 0);
+      const bowR = 14;
+      ctx.strokeStyle = '#c9a46a';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(10, 0, bowR, -0.9, 0.9); ctx.stroke();
+      ctx.strokeStyle = 'rgba(234,230,255,.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(10 + bowR * Math.cos(-0.9), bowR * Math.sin(-0.9));
+      ctx.lineTo(10 + bowR * Math.cos(0.9), bowR * Math.sin(0.9));
+      ctx.stroke();
+      if (lvl >= 3) {
+        ctx.strokeStyle = def.color; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(6, 0, 5, -0.8, 0.8); ctx.stroke();
+      }
+      ctx.restore();
+    } else {
+      const bob = Math.sin(time * 3 + x) * 2;
+      const cy = y - 3 + bob;
+      ctx.save();
+      ctx.translate(x, cy);
+      ctx.rotate(time * 1.2);
+      ctx.strokeStyle = 'rgba(176,38,255,.7)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.arc(0, 0, 13, 0, TWO_PI); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      const g = ctx.createRadialGradient(x - 2, cy - 3, 1, x, cy, 9);
+      g.addColorStop(0, '#f0d6ff');
+      g.addColorStop(1, '#7a1cff');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(x, cy - 9); ctx.lineTo(x + 7, cy); ctx.lineTo(x, cy + 9); ctx.lineTo(x - 7, cy);
+      ctx.closePath(); ctx.fill();
+      if (tw.pulse > 0) {
+        ctx.strokeStyle = `rgba(176,38,255,${(tw.pulse * 0.7).toFixed(3)})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(x, cy, 9 + (1 - tw.pulse) * 8, 0, TWO_PI); ctx.stroke();
       }
     }
 
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(176,38,255,.22)';
-    ctx.lineWidth = T * 0.8;
-    ctx.beginPath();
-    WAYPOINTS.forEach(([x, y], i) => {
-      const px = (x + 0.5) * T, py = (y + 0.5) * T;
-      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
-    });
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(0,200,255,.35)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([8, 8]);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    for (let i = 0; i < MAX_LVL; i++) {
+      ctx.fillStyle = i < lvl ? def.color : 'rgba(255,255,255,.15)';
+      ctx.fillRect(x - 12 + i * 5, y + 16, 3.5, 3.5);
+    }
+    ctx.globalAlpha = 1;
+  }
 
-    ctx.strokeStyle = 'rgba(176,38,255,.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let c = 0; c <= COLS; c++) { ctx.moveTo(c * T + 0.5, 0); ctx.lineTo(c * T + 0.5, H); }
-    for (let r = 0; r <= ROWS; r++) { ctx.moveTo(0, r * T + 0.5); ctx.lineTo(W, r * T + 0.5); }
-    ctx.stroke();
+  // ----- Drawing: enemies -----
+  function drawEnemy(e) {
+    const d = ENEMY_DEF[e.type];
+    const r = d.r;
+    let x = e.px, y = e.py;
+    if (e.type === 'ghost') y += Math.sin(e.ph * 0.6) * 4;
+    else y += Math.sin(e.ph) * 1.2;
 
-    const hoverOk = hover && hover.c >= 0 && hover.r >= 0 && hover.c < COLS && hover.r < ROWS &&
-                    !pathTiles.has(hover.r * COLS + hover.c) && !towerAt(hover.c, hover.r);
-    if (hoverOk && state !== 'won' && state !== 'lost') {
-      ctx.fillStyle = 'rgba(0,200,255,.18)';
-      ctx.fillRect(hover.c * T, hover.r * T, T, T);
+    ctx.fillStyle = 'rgba(0,0,0,.4)';
+    ctx.beginPath();
+    ctx.ellipse(e.px, e.py + r * 0.9, r * 0.9, r * 0.32, 0, 0, TWO_PI);
+    ctx.fill();
+
+    const hit = e.flash > 0;
+    ctx.save();
+    ctx.translate(x, y);
+
+    if (e.type === 'grunt') {
+      const sq = Math.sin(e.ph) * 0.07;
+      ctx.fillStyle = d.color;
+      ctx.beginPath(); ctx.ellipse(0, 0, r * (1 + sq), r * (1 - sq), 0, 0, TWO_PI); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 2;
+      for (let i = -1; i <= 1; i += 2) {
+        ctx.beginPath();
+        ctx.moveTo(i * r * 0.5, r * 0.8);
+        ctx.lineTo(i * r * 0.7 + Math.sin(e.ph + i) * 2, r * 1.3);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#05030a';
+      ctx.beginPath(); ctx.arc(-3, -2, 1.8, 0, TWO_PI); ctx.arc(3, -2, 1.8, 0, TWO_PI); ctx.fill();
+    } else if (e.type === 'runner') {
+      ctx.rotate(e.ang);
+      ctx.strokeStyle = 'rgba(255,225,77,.35)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(-r * 2.4, 0); ctx.lineTo(-r * 0.6, 0); ctx.stroke();
+      ctx.fillStyle = d.color;
       ctx.beginPath();
-      ctx.arc(hover.c * T + T / 2, hover.r * T + T / 2, TOWER_DEF[selType].range, 0, TWO_PI);
-      ctx.fillStyle = 'rgba(0,200,255,.05)';
-      ctx.fill();
+      ctx.moveTo(r * 1.2, 0); ctx.lineTo(-r * 0.8, -r * 0.9); ctx.lineTo(-r * 0.5, 0); ctx.lineTo(-r * 0.8, r * 0.9);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#05030a';
+      ctx.beginPath(); ctx.arc(r * 0.4, 0, 1.6, 0, TWO_PI); ctx.fill();
+    } else if (e.type === 'ghost') {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = d.color;
+      ctx.beginPath();
+      ctx.arc(0, -1, r, Math.PI, 0);
+      const wave = Math.sin(e.ph * 1.4) * 2;
+      ctx.lineTo(r, r * 0.9);
+      for (let i = 0; i < 3; i++) {
+        const xx = r - (i + 1) * (2 * r / 3);
+        ctx.quadraticCurveTo(xx + r / 3, r * 0.9 + wave * (i % 2 ? -1 : 1), xx, r * 0.9);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#05030a';
+      ctx.beginPath(); ctx.arc(-3, -2, 1.8, 0, TWO_PI); ctx.arc(3, -2, 1.8, 0, TWO_PI); ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.drawImage(glowFor(d.color), -r * 2, -r * 2, r * 4, r * 4);
+      ctx.globalCompositeOperation = 'source-over';
+    } else if (e.type === 'tank') {
+      ctx.rotate(e.ang);
+      ctx.fillStyle = '#3a2412';
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = i * TWO_PI / 6;
+        const px = Math.cos(a) * r, py = Math.sin(a) * r;
+        i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = d.color; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,122,26,.5)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(-r * 0.6, 0); ctx.lineTo(r * 0.6, 0); ctx.stroke();
+      ctx.fillStyle = '#ffb04d';
+      ctx.beginPath(); ctx.arc(0, 0, 3, 0, TWO_PI); ctx.fill();
+    } else {
+      // boss
+      ctx.rotate(time * 1.2);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.drawImage(glowFor(d.color), -r * 3, -r * 3, r * 6, r * 6);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#2a0d4a';
+      ctx.strokeStyle = d.color; ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      for (let i = 0; i < 12; i++) {
+        const a = i * TWO_PI / 12;
+        const rr = i % 2 ? r * 1.25 : r * 0.9;
+        const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
+        i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      }
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ff2e7e';
+      ctx.beginPath(); ctx.arc(0, 0, 4, 0, TWO_PI); ctx.fill();
     }
 
-    if (selected) {
-      const st = statsOf(selected);
-      ctx.beginPath();
-      ctx.arc(selected.x, selected.y, st.range, 0, TWO_PI);
-      ctx.fillStyle = 'rgba(0,200,255,.08)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(0,200,255,.5)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+    if (hit) {
+      ctx.globalAlpha = Math.min(1, e.flash * 6);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, TWO_PI); ctx.fill();
+      ctx.globalAlpha = 1;
     }
+    ctx.restore();
 
-    for (const tw of towers) drawTower(tw, tw === selected);
-    for (const e of enemies) drawEnemy(e);
+    const bw = r * 2.4, frac = Math.max(0, e.hp / e.maxHp);
+    ctx.fillStyle = 'rgba(0,0,0,.6)';
+    ctx.fillRect(e.px - bw / 2, e.py - r - 9, bw, 4);
+    ctx.fillStyle = frac > 0.5 ? '#7dff6a' : frac > 0.25 ? '#ffe14d' : '#ff2e7e';
+    ctx.fillRect(e.px - bw / 2, e.py - r - 9, bw * frac, 4);
+  }
 
+  function drawCore() {
+    const x = (CORE.c + 0.5) * T, y = (CORE.r + 0.5) * T;
+    const pulse = 0.5 + 0.5 * Math.sin(time * 2.5);
     ctx.globalCompositeOperation = 'lighter';
-    for (const b of beams) {
-      ctx.strokeStyle = b.color;
-      ctx.globalAlpha = Math.max(0, b.life / 0.12);
-      ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
+    ctx.drawImage(glowFor(coreHit > 0 ? '#ff2e7e' : '#00c8ff'), x - 30 - pulse * 4, y - 30 - pulse * 4, 60 + pulse * 8, 60 + pulse * 8);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#071a24';
+    ctx.beginPath(); ctx.arc(x, y, 16, 0, TWO_PI); ctx.fill();
+    const gem = ctx.createLinearGradient(x, y - 12, x, y + 12);
+    gem.addColorStop(0, '#eaffff');
+    gem.addColorStop(1, coreHit > 0 ? '#ff2e7e' : '#00c8ff');
+    ctx.fillStyle = gem;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 12); ctx.lineTo(x + 9, y); ctx.lineTo(x, y + 12); ctx.lineTo(x - 9, y);
+    ctx.closePath(); ctx.fill();
+    const frac = Math.max(0, lives / START_LIVES);
+    ctx.strokeStyle = 'rgba(255,255,255,.15)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x, y, 22, -Math.PI / 2, Math.PI * 1.5); ctx.stroke();
+    ctx.strokeStyle = frac > 0.5 ? '#7dff6a' : frac > 0.25 ? '#ffe14d' : '#ff2e7e';
+    ctx.beginPath(); ctx.arc(x, y, 22, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke();
+  }
+
+  function drawProjectiles() {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of projs) {
+      if (p.type === 'cannon') {
+        ctx.fillStyle = '#ffb04d';
+        ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, TWO_PI); ctx.fill();
+      } else {
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 2;
+        const ang = Math.atan2(p.y - p.py, p.x - p.px);
+        ctx.beginPath();
+        ctx.moveTo(p.x - Math.cos(ang) * 10, p.y - Math.sin(ang) * 10);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function drawFx() {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const r of rings) {
+      ctx.strokeStyle = `rgba(${hexRgb(r.color)},${Math.max(0, r.life) * 0.8})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, TWO_PI); ctx.stroke();
+    }
+    for (const p of parts) {
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
     }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
@@ -3667,22 +4012,80 @@ function createTowerDefense() {
     ctx.font = 'bold 14px Segoe UI, Arial';
     ctx.textAlign = 'center';
     for (const p of pops) {
-      ctx.globalAlpha = Math.max(0, p.life);
-      ctx.fillStyle = '#ffe14d';
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+      ctx.fillStyle = p.color;
       ctx.fillText(p.text, p.x, p.y);
     }
     ctx.globalAlpha = 1;
     ctx.textAlign = 'left';
+  }
 
-    if (paused && state !== 'won' && state !== 'lost') {
-      ctx.fillStyle = 'rgba(5,3,13,.55)';
-      ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = '#eae6ff';
-      ctx.font = 'bold 28px Segoe UI, Arial';
+  function validSpot(c, r) {
+    return inGrid(c, r) && !isPath(c, r) && !towerAt(c, r);
+  }
+
+  // Ghost preview of the tower about to be built, with colour-coded validity
+  function drawPreview(c, r) {
+    const def = TOWER_DEF[selType];
+    const valid = validSpot(c, r);
+    const afford = coins >= def.cost;
+    const col = !valid ? '#ff2e7e' : afford ? '#7dff6a' : '#ffb84d';
+    const x = c * T + T / 2, y = r * T + T / 2;
+    ctx.fillStyle = `rgba(${hexRgb(col)},0.14)`;
+    ctx.fillRect(c * T, r * T, T, T);
+    const st = statsOf({ type: selType, lvl: 1 });
+    ctx.beginPath(); ctx.arc(x, y, st.range, 0, TWO_PI);
+    ctx.fillStyle = `rgba(${hexRgb(col)},0.07)`; ctx.fill();
+    ctx.strokeStyle = `rgba(${hexRgb(col)},0.6)`; ctx.lineWidth = 1.5; ctx.stroke();
+    if (valid) {
+      drawTowerBody({ type: selType, lvl: 1, x, y, angle: 0, recoil: 0, pulse: 0 }, 0.55);
+    } else {
+      ctx.strokeStyle = '#ff2e7e'; ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x - 10, y - 10); ctx.lineTo(x + 10, y + 10);
+      ctx.moveTo(x + 10, y - 10); ctx.lineTo(x - 10, y + 10);
+      ctx.stroke();
+    }
+  }
+
+  function render() {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.save();
+    if (shake > 0.2) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    ctx.drawImage(bgCv, 0, 0, W, H);
+
+    drawCore();
+
+    // Selected tower range
+    if (sel) {
+      const st = statsOf(sel);
+      ctx.beginPath(); ctx.arc(sel.x, sel.y, st.range, 0, TWO_PI);
+      ctx.fillStyle = 'rgba(0,200,255,.08)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(0,200,255,.55)'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+
+    for (const tw of towers) drawTowerBody(tw, 1);
+
+    const sorted = enemies.slice().sort((a, b) => a.py - b.py);
+    for (const e of sorted) drawEnemy(e);
+
+    drawProjectiles();
+    drawFx();
+
+    // Placement preview: hover on desktop, pending tile on touch
+    const pv = pending || (state === 'build' || state === 'wave' ? hover : null);
+    if (pv && !sel && (state === 'build' || state === 'wave') && inGrid(pv.c, pv.r)) drawPreview(pv.c, pv.r);
+
+    if (banner) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, banner.life));
       ctx.textAlign = 'center';
-      ctx.fillText('PAUSED', W / 2, H / 2 + 10);
+      ctx.font = 'bold 34px Segoe UI, Arial';
+      ctx.fillStyle = '#00c8ff';
+      ctx.fillText(banner.text, W / 2, H * 0.42);
+      ctx.globalAlpha = 1;
       ctx.textAlign = 'left';
     }
+    ctx.restore();
   }
 
   // ----- UI sync -----
@@ -3691,62 +4094,69 @@ function createTowerDefense() {
     $('#tdLives').textContent = lives;
     $('#tdWave').textContent = wave;
     $('#tdTotal').textContent = TOTAL_WAVES;
+    $('#tdScore').textContent = liveScore();
     $('#tdStart').disabled = state !== 'build' || paused;
     $('#tdPause').disabled = state === 'won' || state === 'lost';
     $('#tdPause').textContent = paused ? '▶ Resume' : '⏸ Pause';
-    $('#tdUpgrade').disabled = !selected;
-    $('#tdSell').disabled = !selected;
+    $('#tdUpgrade').disabled = !sel;
+    $('#tdSell').disabled = !sel;
+  }
+
+  function showSelected() {
+    if (!sel) return;
+    const st = statsOf(sel);
+    const def = TOWER_DEF[sel.type];
+    const up = sel.lvl >= MAX_LVL ? 'MAX level' : `Upgrade ${upgradeCost(sel)} coins`;
+    info(`${def.name} · Level ${sel.lvl}/${MAX_LVL} · Damage ${st.dmg.toFixed(0)} · Range ${st.range.toFixed(0)}${st.shots > 1 ? ' · ' + st.shots + ' arrows' : ''}${st.splash ? ' · Splash ' + st.splash.toFixed(0) : ''} · ${up}`);
   }
 
   function setType(t) {
     selType = t;
     chipEls.forEach(b => b.classList.toggle('active', b.dataset.t === t));
-    selected = null;
+    sel = null;
+    pending = null;
+    const def = TOWER_DEF[t];
+    info(`${def.name} selected · costs ${def.cost} coins. Tap an empty tile to build.`);
     refresh();
   }
 
   function buildAt(c, r) {
     const def = TOWER_DEF[selType];
+    if (!validSpot(c, r)) return;
     if (coins < def.cost) { toast('Not enough coins'); return; }
     coins -= def.cost;
-    towers.push({
-      type: selType, c, r, x: c * T + T / 2, y: r * T + T / 2,
-      lvl: 1, spent: def.cost, cd: 0, angle: 0, pulse: 0,
-    });
+    const x = c * T + T / 2, y = r * T + T / 2;
+    towers.push({ type: selType, c, r, x, y, lvl: 1, spent: def.cost, cd: 0, angle: 0, recoil: 0, pulse: 0 });
+    burstAt(x, y, def.color, 16);
+    ringFx(x, y, 26, def.color);
     Sound.flip();
     info(`${def.name} built. ${coins} coins left.`);
   }
 
-  function upgradeCost(tw) { return Math.round(TOWER_DEF[tw.type].cost * 0.8 * tw.lvl); }
-
   function upgradeSelected() {
-    if (!selected) { toast('Tap a tower first'); return; }
-    if (selected.lvl >= 3) { toast('Already at max level'); return; }
-    const cost = upgradeCost(selected);
+    if (!sel) { toast('Tap a tower first'); return; }
+    if (sel.lvl >= MAX_LVL) { toast('Already at max level'); return; }
+    const cost = upgradeCost(sel);
     if (coins < cost) { toast(`Upgrade costs ${cost} coins`); return; }
     coins -= cost;
-    selected.spent += cost;
-    selected.lvl++;
+    sel.spent += cost;
+    sel.lvl++;
+    burstAt(sel.x, sel.y, '#ffd54d', 22);
+    ringFx(sel.x, sel.y, 30, '#ffd54d');
     Sound.good();
     showSelected();
     refresh();
   }
 
   function sellSelected() {
-    if (!selected) { toast('Tap a tower first'); return; }
-    const refund = Math.round(selected.spent * 0.6);
+    if (!sel) { toast('Tap a tower first'); return; }
+    const refund = Math.round(sel.spent * 0.6);
     coins += refund;
-    towers = towers.filter(t => t !== selected);
-    selected = null;
+    burstAt(sel.x, sel.y, '#ffe14d', 10);
+    towers = towers.filter(t => t !== sel);
+    sel = null;
     info(`Sold for ${refund} coins.`);
     refresh();
-  }
-
-  function showSelected() {
-    if (!selected) return;
-    const st = statsOf(selected);
-    const def = TOWER_DEF[selected.type];
-    info(`${def.name} · Level ${selected.lvl}/3 · Damage ${st.dmg.toFixed(0)} · Range ${st.range.toFixed(0)} · Upgrade ${upgradeCost(selected)} coins`);
   }
 
   function startWave() {
@@ -3756,36 +4166,57 @@ function createTowerDefense() {
     queue = buildQueue(wave);
     spawnT = 0.5;
     state = 'wave';
-    info(`Wave ${wave} of ${TOTAL_WAVES}: ${queue.length} enemies incoming!`);
+    const boss = BOSS_WAVES.includes(wave) ? ' · BOSS incoming!' : '';
+    banner = { text: `WAVE ${wave}`, life: 1.4 };
+    info(`Wave ${wave} of ${TOTAL_WAVES}: ${queue.length} enemies${boss}`);
     refresh();
+  }
+
+  function closeOverlay() {
+    if (overlayEl) { overlayEl.remove(); overlayEl = null; }
+  }
+
+  function showPause() {
+    closeOverlay();
+    const div = document.createElement('div');
+    div.innerHTML = `
+      <div class="overlay">
+        <h3>⏸ PAUSED</h3>
+        <p>Wave ${wave}/${TOTAL_WAVES} · Lives ${lives} · Coins ${coins} · Score ${liveScore()}</p>
+        <div class="td-row">
+          <button class="btn small" id="tdResume">▶ Resume</button>
+          <button class="btn ghost small" id="tdRestart2">↻ Restart</button>
+        </div>
+      </div>`;
+    overlayEl = div.firstElementChild;
+    overlayEl.style.position = 'absolute';
+    overlayEl.style.inset = '0';
+    $('#tdWrap').appendChild(overlayEl);
+    $('#tdResume').onclick = togglePause;
+    $('#tdRestart2').onclick = restart;
   }
 
   function togglePause() {
     if (state === 'won' || state === 'lost') return;
     paused = !paused;
-    info(paused ? 'Paused.' : 'Resumed.');
+    if (paused) { showPause(); info('Paused.'); }
+    else { closeOverlay(); info('Resumed.'); }
     refresh();
   }
 
   function showOver(won, score) {
     closeOverlay();
-    const wrap = $('#tdWrap');
     const div = document.createElement('div');
     div.innerHTML = overlayHTML(
       won ? '🏆 VICTORY!' : '💥 BASE OVERRUN',
-      won ? `All ${TOTAL_WAVES} waves defeated! Score ${score}.`
-          : `You reached wave ${wave}. Score ${score}. Try a different tower mix.`,
+      `${won ? `All ${TOTAL_WAVES} waves defeated!` : `Reached wave ${wave} of ${TOTAL_WAVES}.`} Kills ${kills} · Coins earned ${earned} · Score ${score}.`,
       '↻ Restart', 'tdBtn'
     );
     overlayEl = div.firstElementChild;
     overlayEl.style.position = 'absolute';
     overlayEl.style.inset = '0';
-    wrap.appendChild(overlayEl);
+    $('#tdWrap').appendChild(overlayEl);
     $('#tdBtn').onclick = restart;
-  }
-
-  function closeOverlay() {
-    if (overlayEl) { overlayEl.remove(); overlayEl = null; }
   }
 
   function resetAll() {
@@ -3794,18 +4225,25 @@ function createTowerDefense() {
     wave = 0;
     kills = 0;
     cleared = 0;
+    earned = START_COINS;
     towers = [];
     enemies = [];
     queue = [];
     spawnT = 0;
-    beams = [];
+    projs = [];
+    parts = [];
+    rings = [];
     pops = [];
-    selected = null;
-    paused = false;
+    sel = null;
+    pending = null;
     hover = null;
+    paused = false;
+    banner = null;
+    shake = 0;
+    coreHit = 0;
     state = 'build';
     closeOverlay();
-    info('Tap an empty tile to build a tower, then press ▶ Start Wave.');
+    info('Choose a tower and tap an empty tile to build it, then press ▶ Start Wave.');
     refresh();
     kick();
   }
@@ -3821,10 +4259,13 @@ function createTowerDefense() {
     if (destroyed) return;
     const dt = Math.min(0.05, (t - last) / 1000);
     last = t;
-    if (!paused && (state === 'wave' || state === 'build')) update(dt);
+    if (!paused) {
+      if (state === 'wave' || state === 'build') update(dt);
+      updateFx(dt);
+    }
     render();
     const over = state === 'won' || state === 'lost';
-    if (!over || beams.length || pops.length) raf = requestAnimationFrame(frame);
+    if (!over || parts.length || rings.length || projs.length) raf = requestAnimationFrame(frame);
   }
 
   function kick() {
@@ -3842,27 +4283,46 @@ function createTowerDefense() {
     };
   }
 
-  cv.addEventListener('pointermove', e => { hover = tileAt(e); });
-  cv.addEventListener('pointerleave', () => { hover = null; });
+  cv.addEventListener('pointermove', e => {
+    if (e.pointerType === 'touch') return;
+    hover = tileAt(e);
+  });
+  cv.addEventListener('pointerleave', e => {
+    if (e.pointerType !== 'touch') hover = null;
+  });
+
   cv.addEventListener('pointerdown', e => {
     if (state === 'won' || state === 'lost') return;
+    if (paused) { toast('Resume the game first'); return; }
     const { c, r } = tileAt(e);
-    if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return;
+    if (!inGrid(c, r)) { pending = null; return; }
     const tw = towerAt(c, r);
     if (tw) {
-      selected = tw;
+      sel = tw;
+      pending = null;
       showSelected();
       refresh();
       return;
     }
-    selected = null;
-    if (pathTiles.has(r * COLS + c)) {
-      toast('Enemies walk this path — build beside it');
+    sel = null;
+    if (isPath(c, r)) {
+      pending = null;
       info('Enemies walk this path. Build on the dark tiles beside it.');
       refresh();
       return;
     }
-    buildAt(c, r);
+    if (e.pointerType === 'touch') {
+      if (pending && pending.c === c && pending.r === r) {
+        pending = null;
+        buildAt(c, r);
+      } else {
+        pending = { c, r };
+        const def = TOWER_DEF[selType];
+        info(`Tap again to build ${def.name} here (${def.cost} coins).`);
+      }
+    } else {
+      buildAt(c, r);
+    }
     refresh();
   });
 
@@ -3875,11 +4335,12 @@ function createTowerDefense() {
   const onKey = e => {
     const k = e.key;
     if ((k === ' ' || k === 'Enter') && (state === 'won' || state === 'lost')) { e.preventDefault(); restart(); return; }
+    if (k === 'Escape') { pending = null; sel = null; refresh(); return; }
     if (k === ' ') { e.preventDefault(); startWave(); }
     else if (k === 'p' || k === 'P') togglePause();
     else if (k === '1') setType('cannon');
-    else if (k === '2') setType('frost');
-    else if (k === '3') setType('laser');
+    else if (k === '2') setType('archer');
+    else if (k === '3') setType('magic');
     else if (k === 'u' || k === 'U') upgradeSelected();
     else if (k === 'x' || k === 'X') sellSelected();
   };
