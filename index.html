@@ -413,6 +413,35 @@
     .ttt-cell.pop{animation:none}
     .ttt-line line{transition:none}
   }
+
+  /* ---------- v4: Tower Defense & Sliding Puzzle ---------- */
+  .score-pill{
+    padding:6px 12px;border:1px solid rgba(176,38,255,.5);border-radius:10px;
+    background:rgba(176,38,255,.12);font-size:.9rem;white-space:nowrap;
+  }
+  .td-hud{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:8px}
+  .td-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
+  .td-info{text-align:center;color:var(--muted);font-size:.85rem;margin-top:10px;min-height:20px;padding:0 8px}
+  .btn:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+
+  .pz-board{
+    position:relative;width:min(340px,92%);aspect-ratio:1;margin:6px auto 0;
+    background:rgba(0,0,0,.5);border:1px solid rgba(0,200,255,.35);border-radius:16px;
+    box-shadow:0 0 22px rgba(0,200,255,.18);touch-action:manipulation;
+  }
+  .pz-tile{
+    position:absolute;left:0;top:0;display:flex;align-items:center;justify-content:center;
+    font-weight:900;color:#fff;border-radius:12px;cursor:pointer;user-select:none;
+    background:linear-gradient(135deg,var(--purple2),var(--blue2));
+    border:1px solid rgba(0,200,255,.5);box-shadow:0 0 12px rgba(122,28,255,.45);
+    transition:transform .18s ease,box-shadow .2s ease;
+  }
+  .pz-tile:hover{filter:brightness(1.15)}
+  .pz-tile.win{
+    background:linear-gradient(135deg,var(--blue2),var(--blue));
+    box-shadow:0 0 16px var(--blue);
+  }
+  @media (prefers-reduced-motion:reduce){ .pz-tile{transition:none} }
 </style>
 </head>
 <body>
@@ -871,6 +900,10 @@ const GAMES = [
     desc: 'Flip cards and find every matching pair in the fewest moves.' },
   { id: 'bike', title: '3D Bike Racing', cat: 'Racing', icon: '🏍️',
     desc: 'Lean through neon traffic, grab ⚡ nitro bolts and blast past rivals.' },
+  { id: 'td', title: 'Tower Defense', cat: 'Strategy', icon: '🏰',
+    desc: 'Build and upgrade cannon, frost and laser towers to stop 10 waves of invaders.' },
+  { id: 'puzzle', title: 'Sliding Number Puzzle', cat: 'Puzzle', icon: '🔢',
+    desc: 'Slide the tiles into order 1–8 in as few moves and as little time as you can.' },
 ];
 
 let currentCat = 'All';
@@ -982,6 +1015,8 @@ function mountGame(id) {
     shooter: createShooter,
     memory: createMemory,
     bike: createBike,
+    td: createTowerDefense,
+    puzzle: createSlidingPuzzle,
   };
   activeEngine = engines[id]();
 }
@@ -3280,6 +3315,821 @@ function createBike() {
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
+    }
+  };
+}
+
+
+/* ============================================================
+   GAME 7 (NEW): TOWER DEFENSE  (Strategy)
+   16x12 grid. Enemies walk a winding path. Build & upgrade towers.
+   10 waves, coins from kills, lives lost when enemies escape.
+   ============================================================ */
+function createTowerDefense() {
+  const id = 'td';
+  setFoot('Pick a tower (1/2/3), tap an empty tile to build it, or tap a tower to select it, then ⬆ Upgrade or 💲 Sell. ▶ Start Wave to send enemies. Clear all 10 waves to win. PC: P pause · U upgrade · X sell · Space start wave.');
+  $('#stage').innerHTML = `
+    <div class="game-stage" id="tdWrap" style="position:relative">
+      <div class="td-hud">
+        <span class="score-pill">💰 <b id="tdCoins">0</b></span>
+        <span class="score-pill">❤ <b id="tdLives">0</b></span>
+        <span class="score-pill">🌊 Wave <b id="tdWave">0</b> / <span id="tdTotal">10</span></span>
+      </div>
+      <canvas class="game-canvas" id="tdCanvas" width="640" height="480"></canvas>
+      <div class="td-row">
+        <button class="chip active" data-t="cannon">🔫 Cannon · 25</button>
+        <button class="chip" data-t="frost">❄ Frost · 35</button>
+        <button class="chip" data-t="laser">⚡ Laser · 50</button>
+      </div>
+      <div class="td-row">
+        <button class="btn small" id="tdStart">▶ Start Wave</button>
+        <button class="btn ghost small" id="tdPause">⏸ Pause</button>
+        <button class="btn ghost small" id="tdUpgrade">⬆ Upgrade</button>
+        <button class="btn ghost small" id="tdSell">💲 Sell</button>
+      </div>
+      <div class="td-info" id="tdInfo"></div>
+    </div>`;
+
+  const cv = $('#tdCanvas');
+  const ctx = cv.getContext('2d');
+  const COLS = 16, ROWS = 12, T = 40, W = COLS * T, H = ROWS * T;
+  const DPR = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = W * DPR;
+  cv.height = H * DPR;
+
+  const WAYPOINTS = [[-1, 2], [4, 2], [4, 9], [10, 9], [10, 4], [14, 4], [14, 10], [17, 10]];
+  const TOTAL_WAVES = 10;
+  const START_COINS = 120, START_LIVES = 20;
+  const TOWER_DEF = {
+    cannon: { name: 'Cannon', cost: 25, range: 110, dmg: 12, cd: 0.8, color: '#00c8ff' },
+    frost:  { name: 'Frost',  cost: 35, range: 95,  dmg: 3,  cd: 1.0, color: '#9ef0ff' },
+    laser:  { name: 'Laser',  cost: 50, range: 170, dmg: 7,  cd: 0.35, color: '#ff2e7e' },
+  };
+  const ENEMY_DEF = {
+    grunt:  { hp: 30,  speed: 42, reward: 6,  color: '#7dff6a', r: 9,  lives: 1 },
+    runner: { hp: 18,  speed: 82, reward: 7,  color: '#ffe14d', r: 7,  lives: 1 },
+    tank:   { hp: 120, speed: 26, reward: 15, color: '#ff7a1a', r: 12, lives: 1 },
+    boss:   { hp: 600, speed: 20, reward: 80, color: '#b026ff', r: 16, lives: 3 },
+  };
+
+  // ----- Path geometry (axis-aligned segments) -----
+  const segs = [];
+  let pathLen = 0;
+  for (let i = 0; i < WAYPOINTS.length - 1; i++) {
+    const a = WAYPOINTS[i], b = WAYPOINTS[i + 1];
+    const len = Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]);
+    segs.push({ a, b, start: pathLen, len });
+    pathLen += len;
+  }
+  const pathTiles = new Set();
+  for (const { a, b } of segs) {
+    const dx = Math.sign(b[0] - a[0]), dy = Math.sign(b[1] - a[1]);
+    let x = a[0], y = a[1];
+    for (let guard = 0; guard < 100; guard++) {
+      if (x >= 0 && x < COLS && y >= 0 && y < ROWS) pathTiles.add(y * COLS + x);
+      if (x === b[0] && y === b[1]) break;
+      if (x !== b[0]) x += dx; else y += dy;
+    }
+  }
+  function posAt(s) {
+    for (const sg of segs) {
+      if (s <= sg.start + sg.len) {
+        const t = (s - sg.start) / sg.len;
+        return [sg.a[0] + (sg.b[0] - sg.a[0]) * t, sg.a[1] + (sg.b[1] - sg.a[1]) * t];
+      }
+    }
+    return WAYPOINTS[WAYPOINTS.length - 1];
+  }
+
+  // ----- State -----
+  let state = 'build';           // build | wave | won | lost
+  let coins, lives, wave, kills, cleared;
+  let towers, enemies, queue, spawnT, beams, pops;
+  let selected = null, selType = 'cannon', hover = null, paused = false;
+  let overlayEl = null, raf = 0, last = 0, destroyed = false;
+  const chipEls = $$('#tdWrap [data-t]');
+
+  function info(t) { $('#tdInfo').textContent = t; }
+
+  function towerAt(c, r) { return towers.find(t => t.c === c && t.r === r); }
+
+  function statsOf(tw) {
+    const b = TOWER_DEF[tw.type];
+    const L = tw.lvl - 1;
+    return { dmg: b.dmg * (1 + 0.5 * L), range: b.range * (1 + 0.1 * L), cd: b.cd * (1 - 0.08 * L) };
+  }
+
+  function inRange(tw, e, range) {
+    return Math.hypot(e.px - tw.x, e.py - tw.y) <= range;
+  }
+
+  function pickTarget(tw, range) {
+    let best = null;
+    for (const e of enemies) {
+      if (e.dead || !inRange(tw, e, range)) continue;
+      if (!best || e.s > best.s) best = e;
+    }
+    return best;
+  }
+
+  function buildQueue(w) {
+    const q = [];
+    const n = 6 + w * 2;
+    for (let i = 0; i < n; i++) {
+      const r = Math.random();
+      let t = 'grunt';
+      if (w >= 4 && r < 0.2) t = 'tank';
+      else if (w >= 2 && r < 0.45) t = 'runner';
+      q.push(t);
+    }
+    if (w === 5 || w === 10) q.push('boss');
+    return q;
+  }
+
+  function spawnEnemy(type) {
+    const def = ENEMY_DEF[type];
+    const mult = 1 + 0.12 * (wave - 1);
+    const [sx, sy] = posAt(0);
+    enemies.push({
+      type, s: 0, hp: def.hp * mult, maxHp: def.hp * mult, slow: 0, dead: false,
+      px: (sx + 0.5) * T, py: (sy + 0.5) * T,
+    });
+  }
+
+  function damage(e, dmg) {
+    if (e.dead) return;
+    e.hp -= dmg;
+    if (e.hp <= 0) {
+      e.dead = true;
+      kills++;
+      const r = ENEMY_DEF[e.type].reward;
+      coins += r;
+      pops.push({ x: e.px, y: e.py - 14, text: '+' + r, life: 1 });
+      Sound.click();
+    }
+  }
+
+  function finish(won) {
+    state = won ? 'won' : 'lost';
+    const score = kills * 10 + cleared * 50 + (won ? lives * 10 : 0);
+    finishRound(id, score);
+    showOver(won, score);
+    refresh();
+  }
+
+  function waveCleared() {
+    cleared++;
+    const bonus = 40 + wave * 10;
+    coins += bonus;
+    if (wave >= TOTAL_WAVES) { finish(true); return; }
+    state = 'build';
+    info(`Wave ${wave} cleared! +${bonus} coins. Build or upgrade, then start the next wave.`);
+    refresh();
+  }
+
+  function update(dt) {
+    if (state === 'wave' && queue.length) {
+      spawnT -= dt;
+      if (spawnT <= 0) {
+        spawnEnemy(queue.shift());
+        spawnT = Math.max(0.4, 0.9 - wave * 0.04);
+      }
+    }
+
+    for (const e of enemies) {
+      if (e.dead) continue;
+      const d = ENEMY_DEF[e.type];
+      e.s += d.speed * (e.slow > 0 ? 0.5 : 1) * dt / T;
+      if (e.slow > 0) e.slow -= dt;
+      if (e.s >= pathLen) {
+        e.dead = true;
+        lives -= d.lives;
+        Sound.bad();
+        continue;
+      }
+      const [tx, ty] = posAt(e.s);
+      e.px = (tx + 0.5) * T;
+      e.py = (ty + 0.5) * T;
+    }
+
+    for (const tw of towers) {
+      tw.cd -= dt;
+      tw.pulse = Math.max(0, tw.pulse - dt * 2);
+      if (tw.cd > 0) continue;
+      const st = statsOf(tw);
+      if (tw.type === 'frost') {
+        const near = enemies.filter(e => !e.dead && inRange(tw, e, st.range));
+        if (near.length) {
+          tw.cd = st.cd;
+          tw.pulse = 1;
+          for (const e of near) { e.slow = 1.4; damage(e, st.dmg); }
+        }
+        continue;
+      }
+      const target = pickTarget(tw, st.range);
+      if (!target) continue;
+      tw.cd = st.cd;
+      tw.angle = Math.atan2(target.py - tw.y, target.px - tw.x);
+      beams.push({ x1: tw.x, y1: tw.y, x2: target.px, y2: target.py, color: TOWER_DEF[tw.type].color, life: 0.12 });
+      damage(target, st.dmg);
+    }
+
+    for (const b of beams) b.life -= dt;
+    beams = beams.filter(b => b.life > 0);
+    for (const p of pops) { p.y -= dt * 30; p.life -= dt * 1.2; }
+    pops = pops.filter(p => p.life > 0);
+    enemies = enemies.filter(e => !e.dead);
+
+    if (lives <= 0) { lives = 0; finish(false); refresh(); return; }
+    if (state === 'wave' && queue.length === 0 && enemies.length === 0) waveCleared();
+  }
+
+  // ----- Drawing -----
+  function drawTower(tw, sel) {
+    const def = TOWER_DEF[tw.type];
+    ctx.fillStyle = 'rgba(0,0,0,.45)';
+    ctx.beginPath(); ctx.ellipse(tw.x, tw.y + 12, 14, 5, 0, 0, TWO_PI); ctx.fill();
+    if (tw.type === 'frost' && tw.pulse > 0) {
+      ctx.strokeStyle = `rgba(158,240,255,${(tw.pulse * 0.6).toFixed(3)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(tw.x, tw.y, statsOf(tw).range * (1 - tw.pulse * 0.3), 0, TWO_PI); ctx.stroke();
+    }
+    ctx.fillStyle = '#120828';
+    ctx.beginPath(); ctx.arc(tw.x, tw.y, 15, 0, TWO_PI); ctx.fill();
+    ctx.strokeStyle = def.color;
+    ctx.lineWidth = sel ? 3 : 2;
+    ctx.stroke();
+    if (tw.type === 'frost') {
+      ctx.fillStyle = def.color;
+      ctx.beginPath(); ctx.arc(tw.x, tw.y, 5, 0, TWO_PI); ctx.fill();
+    } else {
+      ctx.save();
+      ctx.translate(tw.x, tw.y);
+      ctx.rotate(tw.angle);
+      ctx.fillStyle = def.color;
+      ctx.fillRect(0, -3, 16 + tw.lvl * 2, 6);
+      ctx.restore();
+    }
+    for (let i = 0; i < tw.lvl; i++) {
+      ctx.fillStyle = def.color;
+      ctx.fillRect(tw.x - 8 + i * 6, tw.y + 17, 4, 4);
+    }
+  }
+
+  function drawEnemy(e) {
+    if (e.dead) return;
+    const d = ENEMY_DEF[e.type];
+    const r = d.r;
+    ctx.fillStyle = 'rgba(0,0,0,.4)';
+    ctx.beginPath(); ctx.ellipse(e.px, e.py + r * 0.8, r * 0.9, r * 0.35, 0, 0, TWO_PI); ctx.fill();
+    ctx.fillStyle = d.color;
+    ctx.beginPath(); ctx.arc(e.px, e.py, r, 0, TWO_PI); ctx.fill();
+    ctx.strokeStyle = e.slow > 0 ? '#9ef0ff' : '#eae6ff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    const bw = r * 2.4, frac = Math.max(0, e.hp / e.maxHp);
+    ctx.fillStyle = 'rgba(0,0,0,.6)';
+    ctx.fillRect(e.px - bw / 2, e.py - r - 8, bw, 4);
+    ctx.fillStyle = frac > 0.5 ? '#7dff6a' : frac > 0.25 ? '#ffe14d' : '#ff2e7e';
+    ctx.fillRect(e.px - bw / 2, e.py - r - 8, bw * frac, 4);
+  }
+
+  function render() {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.fillStyle = '#05030d';
+    ctx.fillRect(0, 0, W, H);
+
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const onPath = pathTiles.has(r * COLS + c);
+        ctx.fillStyle = onPath ? '#1d0d3d' : ((c + r) % 2 ? '#0b0622' : '#0a0520');
+        ctx.fillRect(c * T, r * T, T, T);
+      }
+    }
+
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(176,38,255,.22)';
+    ctx.lineWidth = T * 0.8;
+    ctx.beginPath();
+    WAYPOINTS.forEach(([x, y], i) => {
+      const px = (x + 0.5) * T, py = (y + 0.5) * T;
+      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+    });
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,200,255,.35)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 8]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = 'rgba(176,38,255,.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let c = 0; c <= COLS; c++) { ctx.moveTo(c * T + 0.5, 0); ctx.lineTo(c * T + 0.5, H); }
+    for (let r = 0; r <= ROWS; r++) { ctx.moveTo(0, r * T + 0.5); ctx.lineTo(W, r * T + 0.5); }
+    ctx.stroke();
+
+    const hoverOk = hover && hover.c >= 0 && hover.r >= 0 && hover.c < COLS && hover.r < ROWS &&
+                    !pathTiles.has(hover.r * COLS + hover.c) && !towerAt(hover.c, hover.r);
+    if (hoverOk && state !== 'won' && state !== 'lost') {
+      ctx.fillStyle = 'rgba(0,200,255,.18)';
+      ctx.fillRect(hover.c * T, hover.r * T, T, T);
+      ctx.beginPath();
+      ctx.arc(hover.c * T + T / 2, hover.r * T + T / 2, TOWER_DEF[selType].range, 0, TWO_PI);
+      ctx.fillStyle = 'rgba(0,200,255,.05)';
+      ctx.fill();
+    }
+
+    if (selected) {
+      const st = statsOf(selected);
+      ctx.beginPath();
+      ctx.arc(selected.x, selected.y, st.range, 0, TWO_PI);
+      ctx.fillStyle = 'rgba(0,200,255,.08)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,200,255,.5)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    for (const tw of towers) drawTower(tw, tw === selected);
+    for (const e of enemies) drawEnemy(e);
+
+    ctx.globalCompositeOperation = 'lighter';
+    for (const b of beams) {
+      ctx.strokeStyle = b.color;
+      ctx.globalAlpha = Math.max(0, b.life / 0.12);
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+
+    ctx.font = 'bold 14px Segoe UI, Arial';
+    ctx.textAlign = 'center';
+    for (const p of pops) {
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = '#ffe14d';
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+
+    if (paused && state !== 'won' && state !== 'lost') {
+      ctx.fillStyle = 'rgba(5,3,13,.55)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#eae6ff';
+      ctx.font = 'bold 28px Segoe UI, Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('PAUSED', W / 2, H / 2 + 10);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  // ----- UI sync -----
+  function refresh() {
+    $('#tdCoins').textContent = coins;
+    $('#tdLives').textContent = lives;
+    $('#tdWave').textContent = wave;
+    $('#tdTotal').textContent = TOTAL_WAVES;
+    $('#tdStart').disabled = state !== 'build' || paused;
+    $('#tdPause').disabled = state === 'won' || state === 'lost';
+    $('#tdPause').textContent = paused ? '▶ Resume' : '⏸ Pause';
+    $('#tdUpgrade').disabled = !selected;
+    $('#tdSell').disabled = !selected;
+  }
+
+  function setType(t) {
+    selType = t;
+    chipEls.forEach(b => b.classList.toggle('active', b.dataset.t === t));
+    selected = null;
+    refresh();
+  }
+
+  function buildAt(c, r) {
+    const def = TOWER_DEF[selType];
+    if (coins < def.cost) { toast('Not enough coins'); return; }
+    coins -= def.cost;
+    towers.push({
+      type: selType, c, r, x: c * T + T / 2, y: r * T + T / 2,
+      lvl: 1, spent: def.cost, cd: 0, angle: 0, pulse: 0,
+    });
+    Sound.flip();
+    info(`${def.name} built. ${coins} coins left.`);
+  }
+
+  function upgradeCost(tw) { return Math.round(TOWER_DEF[tw.type].cost * 0.8 * tw.lvl); }
+
+  function upgradeSelected() {
+    if (!selected) { toast('Tap a tower first'); return; }
+    if (selected.lvl >= 3) { toast('Already at max level'); return; }
+    const cost = upgradeCost(selected);
+    if (coins < cost) { toast(`Upgrade costs ${cost} coins`); return; }
+    coins -= cost;
+    selected.spent += cost;
+    selected.lvl++;
+    Sound.good();
+    showSelected();
+    refresh();
+  }
+
+  function sellSelected() {
+    if (!selected) { toast('Tap a tower first'); return; }
+    const refund = Math.round(selected.spent * 0.6);
+    coins += refund;
+    towers = towers.filter(t => t !== selected);
+    selected = null;
+    info(`Sold for ${refund} coins.`);
+    refresh();
+  }
+
+  function showSelected() {
+    if (!selected) return;
+    const st = statsOf(selected);
+    const def = TOWER_DEF[selected.type];
+    info(`${def.name} · Level ${selected.lvl}/3 · Damage ${st.dmg.toFixed(0)} · Range ${st.range.toFixed(0)} · Upgrade ${upgradeCost(selected)} coins`);
+  }
+
+  function startWave() {
+    if (paused) { toast('Resume the game first'); return; }
+    if (state !== 'build') return;
+    wave++;
+    queue = buildQueue(wave);
+    spawnT = 0.5;
+    state = 'wave';
+    info(`Wave ${wave} of ${TOTAL_WAVES}: ${queue.length} enemies incoming!`);
+    refresh();
+  }
+
+  function togglePause() {
+    if (state === 'won' || state === 'lost') return;
+    paused = !paused;
+    info(paused ? 'Paused.' : 'Resumed.');
+    refresh();
+  }
+
+  function showOver(won, score) {
+    closeOverlay();
+    const wrap = $('#tdWrap');
+    const div = document.createElement('div');
+    div.innerHTML = overlayHTML(
+      won ? '🏆 VICTORY!' : '💥 BASE OVERRUN',
+      won ? `All ${TOTAL_WAVES} waves defeated! Score ${score}.`
+          : `You reached wave ${wave}. Score ${score}. Try a different tower mix.`,
+      '↻ Restart', 'tdBtn'
+    );
+    overlayEl = div.firstElementChild;
+    overlayEl.style.position = 'absolute';
+    overlayEl.style.inset = '0';
+    wrap.appendChild(overlayEl);
+    $('#tdBtn').onclick = restart;
+  }
+
+  function closeOverlay() {
+    if (overlayEl) { overlayEl.remove(); overlayEl = null; }
+  }
+
+  function resetAll() {
+    coins = START_COINS;
+    lives = START_LIVES;
+    wave = 0;
+    kills = 0;
+    cleared = 0;
+    towers = [];
+    enemies = [];
+    queue = [];
+    spawnT = 0;
+    beams = [];
+    pops = [];
+    selected = null;
+    paused = false;
+    hover = null;
+    state = 'build';
+    closeOverlay();
+    info('Tap an empty tile to build a tower, then press ▶ Start Wave.');
+    refresh();
+    kick();
+  }
+
+  function restart() {
+    if (destroyed) return;
+    resetAll();
+  }
+
+  // ----- Frame loop -----
+  function frame(t) {
+    raf = 0;
+    if (destroyed) return;
+    const dt = Math.min(0.05, (t - last) / 1000);
+    last = t;
+    if (!paused && (state === 'wave' || state === 'build')) update(dt);
+    render();
+    const over = state === 'won' || state === 'lost';
+    if (!over || beams.length || pops.length) raf = requestAnimationFrame(frame);
+  }
+
+  function kick() {
+    if (raf || destroyed) return;
+    last = performance.now();
+    raf = requestAnimationFrame(frame);
+  }
+
+  // ----- Input -----
+  function tileAt(e) {
+    const r = cv.getBoundingClientRect();
+    return {
+      c: Math.floor((e.clientX - r.left) / r.width * COLS),
+      r: Math.floor((e.clientY - r.top) / r.height * ROWS),
+    };
+  }
+
+  cv.addEventListener('pointermove', e => { hover = tileAt(e); });
+  cv.addEventListener('pointerleave', () => { hover = null; });
+  cv.addEventListener('pointerdown', e => {
+    if (state === 'won' || state === 'lost') return;
+    const { c, r } = tileAt(e);
+    if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return;
+    const tw = towerAt(c, r);
+    if (tw) {
+      selected = tw;
+      showSelected();
+      refresh();
+      return;
+    }
+    selected = null;
+    if (pathTiles.has(r * COLS + c)) {
+      toast('Enemies walk this path — build beside it');
+      info('Enemies walk this path. Build on the dark tiles beside it.');
+      refresh();
+      return;
+    }
+    buildAt(c, r);
+    refresh();
+  });
+
+  chipEls.forEach(b => b.addEventListener('click', () => setType(b.dataset.t)));
+  $('#tdStart').onclick = startWave;
+  $('#tdPause').onclick = togglePause;
+  $('#tdUpgrade').onclick = upgradeSelected;
+  $('#tdSell').onclick = sellSelected;
+
+  const onKey = e => {
+    const k = e.key;
+    if ((k === ' ' || k === 'Enter') && (state === 'won' || state === 'lost')) { e.preventDefault(); restart(); return; }
+    if (k === ' ') { e.preventDefault(); startWave(); }
+    else if (k === 'p' || k === 'P') togglePause();
+    else if (k === '1') setType('cannon');
+    else if (k === '2') setType('frost');
+    else if (k === '3') setType('laser');
+    else if (k === 'u' || k === 'U') upgradeSelected();
+    else if (k === 'x' || k === 'X') sellSelected();
+  };
+  window.addEventListener('keydown', onKey);
+
+  resetAll();
+
+  return {
+    destroy() {
+      destroyed = true;
+      cancelAnimationFrame(raf);
+      raf = 0;
+      window.removeEventListener('keydown', onKey);
+    }
+  };
+}
+
+
+/* ============================================================
+   GAME 8 (NEW): SLIDING NUMBER PUZZLE  (Puzzle)
+   Classic 3x3 "8-puzzle". Puzzles are generated by random legal
+   moves from the solved board, so every puzzle is solvable.
+   Easy / Medium / Hard, move counter, timer, win detection.
+   ============================================================ */
+function createSlidingPuzzle() {
+  const id = 'puzzle';
+  setFoot('Tap a tile next to the empty space to slide it. PC: arrow keys move the empty space. Solve 1–8 in as few moves and as little time as possible.');
+  $('#stage').innerHTML = `
+    <div class="game-stage" id="pzWrap" style="position:relative">
+      <div class="td-row">
+        <button class="chip" data-d="easy">Easy</button>
+        <button class="chip active" data-d="medium">Medium</button>
+        <button class="chip" data-d="hard">Hard</button>
+      </div>
+      <div class="td-hud">
+        <span class="score-pill">🔢 Moves <b id="pzMoves">0</b></span>
+        <span class="score-pill">⏱ <b id="pzTime">00:00</b></span>
+        <span class="score-pill">🏆 Best <b id="pzBest">–</b></span>
+      </div>
+      <div class="pz-board" id="pzBoard"></div>
+      <div class="td-row">
+        <button class="btn small" id="pzShuffle">🔀 Shuffle</button>
+        <button class="btn ghost small" id="pzRestart">↺ Restart</button>
+      </div>
+      <div class="td-info" id="pzInfo">Put the tiles in order from 1 to 8, with the empty space last.</div>
+    </div>`;
+
+  const board = $('#pzBoard');
+  const SOLVED = [1, 2, 3, 4, 5, 6, 7, 8, 0];
+  const SCRAMBLE = { easy: 25, medium: 80, hard: 250 };
+  const PAD = 8, GAP = 6;
+  const fmt = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+
+  let diff = 'medium';
+  let grid = SOLVED.slice();
+  let startGrid = SOLVED.slice();
+  let moves = 0, secs = 0, playing = false, won = false, destroyed = false;
+  let overlayEl = null, timerId = 0;
+  const tileEls = {};
+  const chipEls = $$('#pzWrap [data-d]');
+
+  for (let v = 1; v <= 8; v++) {
+    const el = document.createElement('div');
+    el.className = 'pz-tile';
+    el.textContent = v;
+    el.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      tapIndex(grid.indexOf(v));
+    });
+    board.appendChild(el);
+    tileEls[v] = el;
+  }
+
+  function layout() {
+    const bw = board.clientWidth;
+    if (!bw) return;
+    const S = (bw - PAD * 2 - GAP * 2) / 3;
+    for (let i = 0; i < 9; i++) {
+      const v = grid[i];
+      if (!v) continue;
+      const el = tileEls[v];
+      el.style.width = S + 'px';
+      el.style.height = S + 'px';
+      el.style.fontSize = (S * 0.42) + 'px';
+      el.style.transform = `translate(${PAD + (i % 3) * (S + GAP)}px, ${PAD + Math.floor(i / 3) * (S + GAP)}px)`;
+      el.classList.toggle('win', won);
+    }
+  }
+
+  function updateHud() {
+    $('#pzMoves').textContent = moves;
+    $('#pzTime').textContent = fmt(secs);
+    const b = Store.get('pz_best_' + diff, null);
+    $('#pzBest').textContent = b === null ? '–' : b + ' moves';
+  }
+
+  function info(t) { $('#pzInfo').textContent = t; }
+
+  function isSolved() { return grid.join() === SOLVED.join(); }
+
+  // Slide the tile at index i into the empty space at index blank (must be adjacent)
+  function slide(i, blank) {
+    grid[blank] = grid[i];
+    grid[i] = 0;
+    moves++;
+    playing = true;
+    layout();
+    updateHud();
+    if (isSolved()) finishPuzzle();
+  }
+
+  function adjacent(a, b) {
+    const ra = Math.floor(a / 3), ca = a % 3, rb = Math.floor(b / 3), cb = b % 3;
+    return Math.abs(ra - rb) + Math.abs(ca - cb) === 1;
+  }
+
+  function tapIndex(i) {
+    if (won || i < 0) return;
+    const blank = grid.indexOf(0);
+    if (!adjacent(i, blank)) {
+      info('Only tiles next to the empty space can move.');
+      return;
+    }
+    slide(i, blank);
+  }
+
+  // Random walk from the solved board: always solvable, never already solved
+  function scramble(d) {
+    let g;
+    do {
+      g = SOLVED.slice();
+      let blank = 8, prev = -1;
+      for (let k = 0; k < SCRAMBLE[d]; k++) {
+        const r = Math.floor(blank / 3), c = blank % 3;
+        const opts = [];
+        if (r > 0) opts.push(blank - 3);
+        if (r < 2) opts.push(blank + 3);
+        if (c > 0) opts.push(blank - 1);
+        if (c < 2) opts.push(blank + 1);
+        const cand = opts.filter(o => o !== prev);
+        const pick = cand[Math.floor(Math.random() * cand.length)];
+        g[blank] = g[pick];
+        g[pick] = 0;
+        prev = blank;
+        blank = pick;
+      }
+    } while (g.join() === SOLVED.join());
+    return g;
+  }
+
+  function closeOverlay() {
+    if (overlayEl) { overlayEl.remove(); overlayEl = null; }
+  }
+
+  function resetCounters() {
+    moves = 0;
+    secs = 0;
+    playing = false;
+    won = false;
+    closeOverlay();
+    updateHud();
+    info('Slide the tiles into order 1–8. The timer starts with your first move.');
+  }
+
+  function newGame() {
+    grid = scramble(diff);
+    startGrid = grid.slice();
+    resetCounters();
+    layout();
+  }
+
+  function restartSame() {
+    grid = startGrid.slice();
+    resetCounters();
+    layout();
+  }
+
+  function finishPuzzle() {
+    won = true;
+    playing = false;
+    const score = Math.max(100, 1000 - moves * 8 - secs);
+    const key = 'pz_best_' + diff;
+    const best = Store.get(key, null);
+    if (best === null || moves < best) Store.set(key, moves);
+    finishRound(id, score);
+    layout();
+    updateHud();
+    info(`Solved in ${moves} moves and ${fmt(secs)}!`);
+    showOver(score);
+  }
+
+  function showOver(score) {
+    closeOverlay();
+    const wrap = $('#pzWrap');
+    const div = document.createElement('div');
+    div.innerHTML = overlayHTML(
+      '🧩 SOLVED!',
+      `Moves ${moves} · Time ${fmt(secs)} · Score ${score}. Press New Puzzle to play again.`,
+      '🔀 New Puzzle', 'pzBtn'
+    );
+    overlayEl = div.firstElementChild;
+    overlayEl.style.position = 'absolute';
+    overlayEl.style.inset = '0';
+    wrap.appendChild(overlayEl);
+    $('#pzBtn').onclick = newGame;
+  }
+
+  chipEls.forEach(b => b.addEventListener('click', () => {
+    diff = b.dataset.d;
+    chipEls.forEach(x => x.classList.toggle('active', x === b));
+    newGame();
+  }));
+  $('#pzShuffle').onclick = newGame;
+  $('#pzRestart').onclick = restartSame;
+
+  const DIRS = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+  const onKey = e => {
+    if ((e.key === ' ' || e.key === 'Enter') && won) { e.preventDefault(); newGame(); return; }
+    const d = DIRS[e.key];
+    if (!d) return;
+    e.preventDefault();
+    if (won) return;
+    // The empty space moves in the arrow's direction
+    const blank = grid.indexOf(0);
+    const r = Math.floor(blank / 3) + d[0], c = (blank % 3) + d[1];
+    if (r < 0 || r > 2 || c < 0 || c > 2) return;
+    slide(r * 3 + c, blank);
+  };
+  window.addEventListener('keydown', onKey);
+
+  const onResize = () => layout();
+  window.addEventListener('resize', onResize);
+
+  timerId = setInterval(() => {
+    if (playing && !won) {
+      secs++;
+      $('#pzTime').textContent = fmt(secs);
+    }
+  }, 1000);
+
+  newGame();
+  updateHud();
+  setTimeout(layout, 0);
+
+  return {
+    destroy() {
+      destroyed = true;
+      clearInterval(timerId);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
     }
   };
 }
