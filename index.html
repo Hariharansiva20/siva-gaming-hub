@@ -394,6 +394,25 @@
   @media (prefers-reduced-motion:reduce){
     *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
   }
+
+  /* ---------- v2 game upgrades (Snake, Tic Tac Toe, Shooter) ---------- */
+  .ttt-wrap{position:relative}
+  .ttt-board.v2{position:relative;gap:3%}
+  .ttt-board.v2 .ttt-cell{border-radius:14px;transition:transform .2s,background .2s,box-shadow .2s}
+  .ttt-board.v2 .ttt-cell:not(.x):not(.o):hover{transform:scale(1.03)}
+  .ttt-cell.pop{animation:tttPop .28s cubic-bezier(.2,1.4,.4,1)}
+  @keyframes tttPop{0%{transform:scale(.3);opacity:.2}100%{transform:scale(1);opacity:1}}
+  .ttt-line{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .ttt-line line{
+    stroke:#00c8ff;stroke-width:5;stroke-linecap:round;vector-effect:non-scaling-stroke;
+    stroke-dasharray:600;stroke-dashoffset:600;filter:drop-shadow(0 0 6px #00c8ff);
+    transition:stroke-dashoffset .5s ease;
+  }
+  .ttt-line line.on{stroke-dashoffset:0}
+  @media (prefers-reduced-motion:reduce){
+    .ttt-cell.pop{animation:none}
+    .ttt-line line{transition:none}
+  }
 </style>
 </head>
 <body>
@@ -1570,188 +1589,375 @@ function createRacing() {
   };
 }
 
+/* =========================================================
+   GAME HELPERS (v2)
+   ========================================================= */
+const TWO_PI = Math.PI * 2;
+
+// Pre-rendered radial glow sprite: drawn with drawImage() instead of costly shadowBlur
+function glowSprite(rgb, px) {
+  const c = document.createElement('canvas');
+  c.width = c.height = px;
+  const g = c.getContext('2d');
+  const gr = g.createRadialGradient(px / 2, px / 2, 0, px / 2, px / 2, px / 2);
+  gr.addColorStop(0, `rgba(${rgb},1)`);
+  gr.addColorStop(0.35, `rgba(${rgb},0.55)`);
+  gr.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = gr;
+  g.fillRect(0, 0, px, px);
+  return c;
+}
+
+function mixRGB(a, b, t) {
+  return [0, 1, 2].map(i => Math.round(a[i] + (b[i] - a[i]) * t));
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+
+function heartPath(ctx, x, y, s) {
+  ctx.beginPath();
+  ctx.moveTo(x, y + s * 0.5);
+  ctx.bezierCurveTo(x - s * 1.2, y - s * 0.4, x - s * 0.5, y - s * 1.1, x, y - s * 0.3);
+  ctx.bezierCurveTo(x + s * 0.5, y - s * 1.1, x + s * 1.2, y - s * 0.4, x, y + s * 0.5);
+  ctx.fill();
+}
+
 /* ============================================================
-   GAME 2: SNAKE
+   GAME 2: SNAKE (v2 - same rules, upgraded visuals & input)
+   Rules: grid 20x20, +10 per orb, walls/self kill, Restart, P pauses.
    ============================================================ */
 function createSnake() {
   const id = 'snake';
-  setFoot('Controls: Arrow keys / WASD on desktop, or swipe on the board / on-screen arrows on mobile. Eat orbs to grow.');
+  setFoot('PC: Arrow keys / WASD steer · P pauses · Space or Enter restarts. Mobile: swipe on the board or use the arrow pad. Eat glowing orbs to grow.');
   $('#stage').innerHTML = `
     <div class="snake-wrap">
-      <canvas class="game-canvas" id="sCanvas" width="400" height="400"></canvas>
+      <canvas class="game-canvas" id="sCanvas" width="400" height="400" style="aspect-ratio:1/1"></canvas>
       <div class="dpad" id="dpad">
-        <button class="up" data-d="up">▲</button>
-        <button class="left" data-d="left">◀</button>
-        <button class="down" data-d="down">▼</button>
-        <button class="right" data-d="right">▶</button>
+        <button class="up" data-d="up" aria-label="Up">▲</button>
+        <button class="left" data-d="left" aria-label="Left">◀</button>
+        <button class="down" data-d="down" aria-label="Down">▼</button>
+        <button class="right" data-d="right" aria-label="Right">▶</button>
       </div>
     </div>`;
-  const cv = $('#sCanvas'), ctx = cv.getContext('2d');
-  const N = 20, CELL = cv.width / N;
-  let snake, dir, nextDir, food, score, timer, over, paused = false;
 
-  function newGame() {
-    snake = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
-    dir = { x: 1, y: 0 }; nextDir = { x: 1, y: 0 };
-    score = 0; over = false; setScore(0);
-    placeFood();
-    clearInterval(timer);
-    timer = setInterval(tick, 115);
+  const cv = $('#sCanvas');
+  const ctx = cv.getContext('2d');
+  const LOG = 400, N = 20, CELL = LOG / N, TICK = 0.115;
+  const DPR = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = LOG * DPR;
+  cv.height = LOG * DPR;
+
+  const DIRS = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
+  const KEYMAP = { ArrowUp: 'up', w: 'up', W: 'up', ArrowDown: 'down', s: 'down', S: 'down',
+                   ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right' };
+  const HEAD_RGB = [0, 229, 255], TAIL_RGB = [176, 38, 255];
+  const glowFood = glowSprite('255,46,126', 64);
+  const glowHead = glowSprite('0,200,255', 64);
+
+  function makeGrid() {
+    const c = document.createElement('canvas');
+    c.width = LOG * DPR;
+    c.height = LOG * DPR;
+    const g = c.getContext('2d');
+    g.scale(DPR, DPR);
+    const bg = g.createLinearGradient(0, 0, 0, LOG);
+    bg.addColorStop(0, '#0a0520');
+    bg.addColorStop(1, '#05030d');
+    g.fillStyle = bg;
+    g.fillRect(0, 0, LOG, LOG);
+    g.strokeStyle = 'rgba(176,38,255,0.14)';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let i = 0; i <= N; i++) {
+      g.moveTo(i * CELL + 0.5, 0); g.lineTo(i * CELL + 0.5, LOG);
+      g.moveTo(0, i * CELL + 0.5); g.lineTo(LOG, i * CELL + 0.5);
+    }
+    g.stroke();
+    return c;
   }
+  const gridCv = makeGrid();
+
+  let snake, prevSnake, dir, queue, food, score, acc, over, paused, parts, pulse, eatPop;
+  let rafId = 0, last = 0, destroyed = false, overlayEl = null;
 
   function placeFood() {
-    while (true) {
-      const f = { x: randInt(0, N - 1), y: randInt(0, N - 1) };
-      if (!snake.some(s => s.x === f.x && s.y === f.y)) { food = f; return; }
+    let f;
+    do { f = { x: randInt(0, N - 1), y: randInt(0, N - 1) }; }
+    while (snake.some(s => s.x === f.x && s.y === f.y));
+    food = f;
+  }
+
+  function burst(cx, cy, rgb, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * TWO_PI, s = rand(40, 140);
+      parts.push({ x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2,
+                   vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, rgb });
     }
   }
 
-  function tick() {
-    if (over || paused) return;
-    dir = nextDir;
+  function step() {
+    if (queue.length) dir = queue.shift();
+    prevSnake = snake.map(s => ({ ...s }));
     const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
     if (head.x < 0 || head.y < 0 || head.x >= N || head.y >= N ||
         snake.some(s => s.x === head.x && s.y === head.y)) {
-      return endGame();
+      endGame();
+      return;
     }
     snake.unshift(head);
     if (head.x === food.x && head.y === food.y) {
-      score += 10; setScore(score); Sound.eat(); placeFood();
+      score += 10;
+      setScore(score);
+      Sound.eat();
+      burst(head.x, head.y, '255,46,126', 14);
+      eatPop = 1;
+      placeFood();
     } else {
       snake.pop();
     }
-    draw();
   }
 
   function endGame() {
-    over = true; clearInterval(timer);
+    over = true;
     Sound.bad();
+    burst(snake[0].x, snake[0].y, '0,200,255', 26);
     finishRound(id, score);
-    draw();
-    showOverlay('GAME OVER', `Final score: ${score}. Press Restart to play again.`, 'Restart', restart);
+    showOver();
   }
 
-  function draw() {
-    ctx.fillStyle = '#05030d';
-    ctx.fillRect(0, 0, cv.width, cv.height);
-    // grid
-    ctx.strokeStyle = 'rgba(176,38,255,.12)'; ctx.lineWidth = 1;
-    for (let i = 0; i <= N; i++) {
-      ctx.beginPath(); ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, cv.height); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, i * CELL); ctx.lineTo(cv.width, i * CELL); ctx.stroke();
+  function resetGame() {
+    const mid = N / 2 | 0;
+    snake = [{ x: mid, y: mid }, { x: mid - 1, y: mid }, { x: mid - 2, y: mid }];
+    prevSnake = snake.map(s => ({ ...s }));
+    dir = DIRS.right;
+    queue = [];
+    score = 0; acc = 0; over = false; paused = false;
+    parts = []; pulse = 0; eatPop = 0;
+    placeFood();
+    setScore(0);
+    if (overlayEl) { overlayEl.remove(); overlayEl = null; }
+    kick();
+  }
+
+  function restart() {
+    if (destroyed) return;
+    resetGame();
+  }
+
+  function turn(d) {
+    const n = DIRS[d];
+    if (!n || over) return;
+    const ref = queue.length ? queue[queue.length - 1] : dir;
+    if (ref.x === n.x && ref.y === n.y) return;          // same direction
+    if (ref.x + n.x === 0 && ref.y + n.y === 0) return;  // no instant reverse
+    if (queue.length < 2) queue.push(n);                 // buffer up to 2 turns
+  }
+
+  function updateFx(dt) {
+    pulse += dt;
+    eatPop = Math.max(0, eatPop - dt * 4);
+    for (const p of parts) {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 0.94; p.vy *= 0.94;
+      p.life -= dt * 2.2;
     }
-    // food glow
-    ctx.save();
-    ctx.shadowColor = '#ff2e7e'; ctx.shadowBlur = 18;
-    ctx.fillStyle = '#ff2e7e';
-    ctx.beginPath();
-    ctx.arc(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, CELL * 0.36, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    // snake
-    snake.forEach((s, i) => {
-      const t = 1 - i / snake.length;
-      ctx.save();
-      ctx.shadowColor = '#00c8ff'; ctx.shadowBlur = i === 0 ? 16 : 6;
-      ctx.fillStyle = i === 0 ? '#eae6ff' : `rgba(${Math.floor(0 + 176 * (1 - t))},${Math.floor(200 * t + 38 * (1 - t))},255,1)`;
-      ctx.fillRect(s.x * CELL + 1, s.y * CELL + 1, CELL - 2, CELL - 2);
-      ctx.restore();
+    parts = parts.filter(p => p.life > 0);
+  }
+
+  function draw(a) {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.drawImage(gridCv, 0, 0, LOG, LOG);
+
+    // Food: pulsing glowing orb
+    const fx = food.x * CELL + CELL / 2, fy = food.y * CELL + CELL / 2;
+    const pr = CELL * (0.36 + 0.05 * Math.sin(pulse * 6)) + eatPop * 2;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(glowFood, fx - pr * 2, fy - pr * 2, pr * 4, pr * 4);
+    ctx.globalCompositeOperation = 'source-over';
+    const fg = ctx.createRadialGradient(fx - 2, fy - 2, 1, fx, fy, pr);
+    fg.addColorStop(0, '#ffd1e3');
+    fg.addColorStop(1, '#ff2e7e');
+    ctx.fillStyle = fg;
+    ctx.beginPath(); ctx.arc(fx, fy, pr, 0, TWO_PI); ctx.fill();
+
+    // Snake: interpolated positions for smooth motion
+    const pts = snake.map((s, i) => {
+      const from = i === 0 ? prevSnake[0] : (prevSnake[i - 1] || s);
+      return {
+        x: (from.x + (s.x - from.x) * a) * CELL + CELL / 2,
+        y: (from.y + (s.y - from.y) * a) * CELL + CELL / 2,
+      };
     });
+    const count = pts.length;
+    for (let i = count - 1; i >= 0; i--) {
+      const p = pts[i];
+      const t = count > 1 ? i / (count - 1) : 0;
+      const c = mixRGB(HEAD_RGB, TAIL_RGB, t);
+      const size = CELL - (i === 0 ? 2 : 4.5);
+      roundRectPath(ctx, p.x - size / 2, p.y - size / 2, size, size, i === 0 ? 7 : 5);
+      ctx.fillStyle = i === 0 ? '#eaffff' : `rgb(${c[0]},${c[1]},${c[2]})`;
+      ctx.fill();
+    }
+
+    // Head glow + eyes
+    const h = pts[0];
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(glowHead, h.x - CELL * 1.6, h.y - CELL * 1.6, CELL * 3.2, CELL * 3.2);
+    ctx.globalCompositeOperation = 'source-over';
+    const px = -dir.y, py = dir.x;
+    for (const side of [-1, 1]) {
+      const ex = h.x + dir.x * CELL * 0.16 + px * CELL * 0.22 * side;
+      const ey = h.y + dir.y * CELL * 0.16 + py * CELL * 0.22 * side;
+      ctx.fillStyle = '#05030d';
+      ctx.beginPath(); ctx.arc(ex, ey, CELL * 0.12, 0, TWO_PI); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(ex + dir.x * 1.5, ey + dir.y * 1.5, CELL * 0.05, 0, TWO_PI); ctx.fill();
+    }
+
+    // Eat particles
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of parts) {
+      ctx.fillStyle = `rgba(${p.rgb},${Math.max(0, p.life)})`;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    if (paused && !over) {
+      ctx.fillStyle = 'rgba(5,3,13,.55)';
+      ctx.fillRect(0, 0, LOG, LOG);
+      ctx.fillStyle = '#eae6ff';
+      ctx.font = 'bold 28px Segoe UI, Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('PAUSED', LOG / 2, LOG / 2 + 10);
+      ctx.textAlign = 'left';
+    }
   }
 
-  function setDir(d) {
-    const map = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
-    const n = map[d];
-    if (!n) return;
-    // prevent reversing into itself
-    if (dir.x + n.x === 0 && dir.y + n.y === 0) return;
-    nextDir = n;
+  function frame(t) {
+    rafId = 0;
+    if (destroyed) return;
+    const dt = Math.min(0.1, (t - last) / 1000);
+    last = t;
+    if (!over && !paused) {
+      acc += dt;
+      while (acc >= TICK && !over) { acc -= TICK; step(); }
+    }
+    updateFx(dt);
+    draw(over ? 1 : acc / TICK);
+    if (!over || parts.length) rafId = requestAnimationFrame(frame);
   }
 
-  const onKey = (e) => {
+  function kick() {
+    if (rafId || destroyed) return;
+    last = performance.now();
+    rafId = requestAnimationFrame(frame);
+  }
+
+  function showOver() {
+    const wrap = $('#stage .snake-wrap');
+    const div = document.createElement('div');
+    div.innerHTML = overlayHTML('GAME OVER', `Final score: ${score}. Press Restart to play again.`, '↻ Restart', 'sBtn');
+    overlayEl = div.firstElementChild;
+    overlayEl.style.position = 'absolute';
+    overlayEl.style.inset = '0';
+    wrap.appendChild(overlayEl);
+    $('#sBtn').onclick = restart;
+  }
+
+  // ----- Input -----
+  const onKey = e => {
     const k = e.key;
-    const m = { ArrowUp: 'up', w: 'up', W: 'up', ArrowDown: 'down', s: 'down', S: 'down',
-                ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right' }[k];
-    if (m) { setDir(m); e.preventDefault(); }
-    if (k === ' ' && over) restart();
-    if (k === 'p' || k === 'P') { paused = !paused; toast(paused ? 'Paused' : 'Resumed'); }
+    if (KEYMAP[k]) { turn(KEYMAP[k]); e.preventDefault(); return; }
+    if ((k === ' ' || k === 'Enter') && over) { e.preventDefault(); restart(); return; }
+    if ((k === 'p' || k === 'P') && !over) {
+      paused = !paused;
+      toast(paused ? 'Paused' : 'Resumed');
+      kick();
+    }
   };
   window.addEventListener('keydown', onKey);
 
-  // Swipe on canvas
-  let sx = 0, sy = 0;
-  const ts = (e) => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; };
-  const te = (e) => {
-    const t = e.changedTouches[0];
-    const dx = t.clientX - sx, dy = t.clientY - sy;
+  let sx = 0, sy = 0, tracking = false;
+  const onDown = e => { sx = e.clientX; sy = e.clientY; tracking = true; };
+  const onUp = e => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
     if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
-    if (Math.abs(dx) > Math.abs(dy)) setDir(dx > 0 ? 'right' : 'left');
-    else setDir(dy > 0 ? 'down' : 'up');
+    if (Math.abs(dx) > Math.abs(dy)) turn(dx > 0 ? 'right' : 'left');
+    else turn(dy > 0 ? 'down' : 'up');
   };
-  cv.addEventListener('touchstart', ts, { passive: true });
-  cv.addEventListener('touchend', te, { passive: true });
+  cv.addEventListener('pointerdown', onDown);
+  cv.addEventListener('pointerup', onUp);
+  cv.addEventListener('pointercancel', () => { tracking = false; });
 
-  // On-screen d-pad (shown on touch devices / narrow screens)
   const dpad = $('#dpad');
-  if (matchMedia('(hover:none), (max-width:700px)').matches) dpad.style.display = 'grid';
-  $$('#dpad button').forEach(b => {
-    b.addEventListener('touchstart', e => { e.preventDefault(); setDir(b.dataset.d); }, { passive: false });
-    b.addEventListener('mousedown', () => setDir(b.dataset.d));
-  });
+  if (matchMedia('(hover:none), (pointer:coarse), (max-width:700px)').matches) dpad.style.display = 'grid';
+  dpad.querySelectorAll('button').forEach(b =>
+    b.addEventListener('pointerdown', e => { e.preventDefault(); turn(b.dataset.d); }));
 
-  function showOverlay(title, body, label, cb) {
-    const stage = $('#stage .snake-wrap');
-    const div = document.createElement('div');
-    div.innerHTML = overlayHTML(title, body, label, 'sBtn');
-    div.firstElementChild.style.position = 'absolute';
-    div.firstElementChild.style.inset = '0';
-    stage.style.position = 'relative';
-    stage.appendChild(div.firstElementChild);
-    $('#sBtn').onclick = () => cb();
-  }
-  function restart() {
-    const ov = $('#stage .overlay'); if (ov) ov.remove();
-    newGame(); draw();
-  }
-
-  newGame(); draw();
+  resetGame();
 
   return {
     destroy() {
-      clearInterval(timer);
+      destroyed = true;
+      cancelAnimationFrame(rafId);
+      rafId = 0;
       window.removeEventListener('keydown', onKey);
     }
   };
 }
 
 /* ============================================================
-   GAME 3: TIC TAC TOE (vs. unbeatable minimax AI)
+   GAME 3: TIC TAC TOE (v2 - same rules & scoring, faster AI, animated board)
+   Rules: You are X and go first. Unbeatable AI is O.
+   Win = 100 pts, Draw = 40 pts, Loss = 0 pts.
    ============================================================ */
 function createTicTacToe() {
   const id = 'ttt';
-  setFoot('You are X. Click a cell to play. Unbeatable AI is O. Win = 100 pts, draw = 40 pts.');
+  setFoot('You are X and always go first. The unbeatable AI is O. Win = 100 pts · Draw = 40 pts · Loss = 0. Restart with the button, Space or Enter.');
   $('#stage').innerHTML = `
-    <div class="ttt-wrap">
+    <div class="ttt-wrap" id="tWrap">
       <div class="ttt-status" id="tStatus">Your turn (X)</div>
-      <div class="ttt-board" id="tBoard"></div>
-      <div style="display:flex;gap:10px;">
+      <div class="ttt-board v2" id="tBoard">
+        <svg class="ttt-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <line id="tLineEl" x1="0" y1="0" x2="0" y2="0"/>
+        </svg>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
         <span class="score-pill" style="padding:6px 12px;border:1px solid rgba(0,200,255,.4);border-radius:10px">You: <b id="tWins">0</b></span>
         <span class="score-pill" style="padding:6px 12px;border:1px solid rgba(176,38,255,.4);border-radius:10px">AI: <b id="tLoss">0</b></span>
         <span class="score-pill" style="padding:6px 12px;border:1px solid rgba(255,255,255,.2);border-radius:10px">Draws: <b id="tDraw">0</b></span>
       </div>
     </div>`;
 
-  const board = Array(9).fill(null);
-  let over = false, wins = 0, losses = 0, draws = 0;
   const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  const board = Array(9).fill(null);
   const boardEl = $('#tBoard');
+  const lineSvg = boardEl.querySelector('svg');
+  const lineEl = $('#tLineEl');
+  const cells = [];
+  let over = false, busy = false, wins = 0, losses = 0, draws = 0, destroyed = false, timers = [];
 
   for (let i = 0; i < 9; i++) {
     const c = document.createElement('div');
     c.className = 'ttt-cell';
     c.dataset.i = i;
-    c.onclick = () => humanMove(i);
-    boardEl.appendChild(c);
+    c.addEventListener('click', () => humanMove(i));
+    boardEl.insertBefore(c, lineSvg);
+    cells.push(c);
+  }
+
+  function later(fn, ms) {
+    const t = setTimeout(() => {
+      timers = timers.filter(x => x !== t);
+      fn();
+    }, ms);
+    timers.push(t);
   }
 
   function winnerOf(b) {
@@ -1761,38 +1967,34 @@ function createTicTacToe() {
     return b.every(Boolean) ? { p: 'draw', line: [] } : null;
   }
 
-  function render(winLine = []) {
-    [...boardEl.children].forEach((cell, i) => {
-      cell.textContent = board[i] || '';
-      cell.className = 'ttt-cell' + (board[i] === 'X' ? ' x' : board[i] === 'O' ? ' o' : '');
-      if (winLine.includes(i)) cell.classList.add('win');
-    });
+  function setStatus(t) {
+    const s = $('#tStatus');
+    if (s) s.textContent = t;
   }
 
-  function humanMove(i) {
-    if (over || board[i]) return;
-    board[i] = 'X';
-    Sound.flip();
-    const r = winnerOf(board);
-    render();
-    if (r) return endRound(r);
-    $('#tStatus').textContent = 'AI is thinking...';
-    setTimeout(aiMove, 350);
+  function paint(i, pop) {
+    const v = board[i];
+    cells[i].textContent = v || '';
+    cells[i].className = 'ttt-cell' + (v === 'X' ? ' x' : v === 'O' ? ' o' : '');
+    if (pop) cells[i].classList.add('pop');
   }
 
-  function aiMove() {
-    if (over) return;
-    const idx = bestMove(board);
-    board[idx] = 'O';
-    Sound.flip();
-    const r = winnerOf(board);
-    render();
-    if (r) return endRound(r);
-    $('#tStatus').textContent = 'Your turn (X)';
+  // Centre of each cell in the 0..100 SVG space (board uses a 3% gap)
+  const cellCentre = i => {
+    const step = (100 - 6) / 3 + 3;
+    return [(i % 3) * step + (100 - 6) / 6, Math.floor(i / 3) * step + (100 - 6) / 6];
+  };
+
+  function drawWinLine(line) {
+    const [x1, y1] = cellCentre(line[0]);
+    const [x2, y2] = cellCentre(line[2]);
+    lineEl.setAttribute('x1', x1); lineEl.setAttribute('y1', y1);
+    lineEl.setAttribute('x2', x2); lineEl.setAttribute('y2', y2);
+    requestAnimationFrame(() => lineEl.classList.add('on'));
   }
 
-  // Minimax for an unbeatable AI
-  function minimax(b, isMax, depth) {
+  // Minimax with alpha-beta pruning: identical results, far less work on Android
+  function minimax(b, isMax, depth, alpha, beta) {
     const r = winnerOf(b);
     if (r) {
       if (r.p === 'O') return 10 - depth;
@@ -1803,301 +2005,525 @@ function createTicTacToe() {
     for (let i = 0; i < 9; i++) {
       if (b[i]) continue;
       b[i] = isMax ? 'O' : 'X';
-      const v = minimax(b, !isMax, depth + 1);
+      const v = minimax(b, !isMax, depth + 1, alpha, beta);
       b[i] = null;
-      best = isMax ? Math.max(best, v) : Math.min(best, v);
+      if (isMax) { best = Math.max(best, v); alpha = Math.max(alpha, best); }
+      else { best = Math.min(best, v); beta = Math.min(beta, best); }
+      if (beta <= alpha) break;
     }
     return best;
   }
+
   function bestMove(b) {
     let best = -Infinity, move = -1;
     for (let i = 0; i < 9; i++) {
       if (b[i]) continue;
       b[i] = 'O';
-      const v = minimax(b, false, 0);
+      const v = minimax(b, false, 0, -Infinity, Infinity);
       b[i] = null;
       if (v > best) { best = v; move = i; }
     }
     return move;
   }
 
+  function humanMove(i) {
+    if (destroyed || over || busy || board[i]) return;
+    board[i] = 'X';
+    paint(i, true);
+    Sound.flip();
+    const r = winnerOf(board);
+    if (r) { endRound(r); return; }
+    busy = true;
+    setStatus('AI is thinking…');
+    later(aiMove, 350);
+  }
+
+  function aiMove() {
+    if (destroyed || over) return;
+    const idx = bestMove(board);
+    board[idx] = 'O';
+    paint(idx, true);
+    Sound.flip();
+    busy = false;
+    const r = winnerOf(board);
+    if (r) { endRound(r); return; }
+    setStatus('Your turn (X)');
+  }
+
   function endRound(r) {
     over = true;
+    busy = false;
     let msg, score = 0;
     if (r.p === 'X') { msg = '🎉 You win!'; wins++; score = 100; Sound.win(); }
-    else if (r.p === 'O') { msg = '🤖 AI wins!'; losses++; score = 0; Sound.bad(); }
+    else if (r.p === 'O') { msg = '🤖 AI wins!'; losses++; Sound.bad(); }
     else { msg = '🤝 Draw!'; draws++; score = 40; Sound.good(); }
-    render(r.line);
-    $('#tStatus').textContent = msg;
+    if (r.line.length) {
+      r.line.forEach(i => cells[i].classList.add('win'));
+      drawWinLine(r.line);
+    }
+    setStatus(msg);
     $('#tWins').textContent = wins;
     $('#tLoss').textContent = losses;
     $('#tDraw').textContent = draws;
     setScore(score);
     finishRound(id, score);
-    setTimeout(() => showOverlay(msg, `Round score: ${score}. Press Restart for a new round.`, 'Restart', restart), 700);
+    later(() => showOver(msg, score), 900);
   }
 
-  function showOverlay(title, body, label, cb) {
-    const wrap = $('#stage .ttt-wrap');
+  function showOver(msg, score) {
+    if (destroyed || !over) return;
+    const wrap = $('#tWrap');
     const div = document.createElement('div');
-    div.innerHTML = overlayHTML(title, body, label, 'tBtn');
+    div.innerHTML = overlayHTML(msg, `Round score: ${score}. Press Restart for a new round.`, '↻ Restart', 'tBtn');
     const ov = div.firstElementChild;
-    ov.style.position = 'absolute'; ov.style.inset = '0';
-    ov.style.background = 'rgba(5,3,13,.7)';
+    ov.style.position = 'absolute';
+    ov.style.inset = '0';
+    ov.style.background = 'rgba(5,3,13,.72)';
     ov.style.borderRadius = '12px';
-    wrap.style.position = 'relative';
     wrap.appendChild(ov);
-    $('#tBtn').onclick = cb;
+    $('#tBtn').onclick = restart;
   }
 
   function restart() {
-    const ov = $('#stage .overlay'); if (ov) ov.remove();
-    board.fill(null); over = false;
-    $('#tStatus').textContent = 'Your turn (X)';
+    if (destroyed) return;
+    timers.forEach(t => clearTimeout(t));
+    timers = [];
+    board.fill(null);
+    over = false;
+    busy = false;
+    cells.forEach(c => { c.className = 'ttt-cell'; c.textContent = ''; });
+    lineEl.classList.remove('on');
+    const ov = $('#tWrap .overlay');
+    if (ov) ov.remove();
+    setStatus('Your turn (X)');
     setScore(0);
-    render();
   }
 
-  render();
-  return { destroy() {} };
+  const onKey = e => {
+    if ((e.key === ' ' || e.key === 'Enter') && over) { e.preventDefault(); restart(); }
+  };
+  window.addEventListener('keydown', onKey);
+
+  setStatus('Your turn (X)');
+  return {
+    destroy() {
+      destroyed = true;
+      timers.forEach(t => clearTimeout(t));
+      timers = [];
+      window.removeEventListener('keydown', onKey);
+    }
+  };
 }
 
 /* ============================================================
-   GAME 4: SPACE SHOOTER
+   GAME 4: SPACE SHOOTER (v2 - same mechanics, upgraded look & touch)
+   Rules: ← → / A D move, Space fires (hold), 20 pts green / 50 pts pink,
+   3 lives, waves every 300 pts. Brief invulnerability after a hit.
    ============================================================ */
 function createShooter() {
   const id = 'shooter';
-  setFoot('Move: ← → or A/D (desktop) · on-screen ◀ ▶ (mobile). Fire: Space or the FIRE button. Destroy enemies, avoid collisions.');
+  setFoot('PC: ← → or A/D move · hold Space to fire · Space or Enter restarts. Mobile: drag across the screen to move, hold 🔥 FIRE. Destroy enemies, avoid collisions.');
   $('#stage').innerHTML = `
-    <div>
-      <canvas class="game-canvas" id="shCanvas" width="480" height="600"></canvas>
+    <div id="shWrap" style="position:relative">
+      <canvas class="game-canvas" id="shCanvas" width="480" height="600" style="aspect-ratio:480/600"></canvas>
       <div class="shooter-controls">
         <button id="shL">◀ LEFT</button>
         <button id="shF">🔥 FIRE</button>
         <button id="shR">RIGHT ▶</button>
       </div>
     </div>`;
-  const cv = $('#shCanvas'), ctx = cv.getContext('2d');
-  const W = cv.width, H = cv.height;
-  let ship, bullets, enemies, particles, stars, score, lives, wave, running, raf, last, fireCD, enemyTimer, over;
-  const keys = { l: false, r: false, f: false };
-  const stars0 = Array.from({ length: 60 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: rand(0.5, 2) }));
 
-  function reset() {
-    ship = { x: W / 2, y: H - 60, w: 40, h: 34, speed: 6 };
-    bullets = []; enemies = []; particles = [];
-    stars = stars0.map(s => ({ ...s }));
-    score = 0; lives = 3; wave = 1;
-    fireCD = 0; enemyTimer = 0; over = false;
+  const cv = $('#shCanvas');
+  const ctx = cv.getContext('2d');
+  const W = 480, H = 600;
+  const DPR = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = W * DPR;
+  cv.height = H * DPR;
+
+  const glowCyan = glowSprite('0,200,255', 96);
+  const glowPurple = glowSprite('176,38,255', 64);
+  const glowGreen = glowSprite('125,255,106', 80);
+  const glowPink = glowSprite('255,46,126', 96);
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#0b0426');
+  bgGrad.addColorStop(0.6, '#05030d');
+  bgGrad.addColorStop(1, '#03010a');
+
+  const stars = [];
+  for (let layer = 0; layer < 3; layer++) {
+    const n = layer === 0 ? 45 : layer === 1 ? 30 : 18;
+    for (let i = 0; i < n; i++) {
+      stars.push({ x: Math.random() * W, y: Math.random() * H, layer, s: 0.6 + layer * 0.6 });
+    }
+  }
+
+  const keys = { l: false, r: false, f: false };
+  let dragX = null;
+  let S = null, raf = 0, last = 0, destroyed = false, overlayEl = null;
+
+  function resetGame() {
+    S = {
+      ship: { x: W / 2, y: H - 64, w: 40, h: 34, speed: 6 },
+      bullets: [], enemies: [], parts: [], rings: [], popups: [],
+      score: 0, lives: 3, wave: 1, fireCD: 0, enemyTimer: 0,
+      over: false, inv: 0, shake: 0, t: 0,
+    };
+    dragX = null;
     setScore(0);
-    running = true; last = performance.now();
-    cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(loop);
+    if (overlayEl) { overlayEl.remove(); overlayEl = null; }
+    kick();
+  }
+
+  function restart() {
+    if (destroyed) return;
+    resetGame();
   }
 
   function spawnEnemy() {
     const kind = Math.random() < 0.2 ? 2 : 1;
-    enemies.push({
+    S.enemies.push({
       x: rand(30, W - 30), y: -30,
-      vy: rand(1.2, 2) + wave * 0.25, vx: rand(-0.8, 0.8),
-      hp: kind, kind,
-      size: kind === 2 ? 34 : 26,
+      vy: rand(1.2, 2) + S.wave * 0.25, vx: rand(-0.8, 0.8),
+      kind, hp: 1, size: kind === 2 ? 34 : 26,
+      phase: rand(0, TWO_PI),
       hue: kind === 2 ? '#ff2e7e' : '#7dff6a',
+      rgb: kind === 2 ? '255,46,126' : '125,255,106',
     });
   }
 
-  function burst(x, y, color) {
-    for (let i = 0; i < 14; i++) {
-      particles.push({ x, y, vx: rand(-3, 3), vy: rand(-3, 3), life: 1, color });
+  function burst(x, y, rgb, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * TWO_PI, s = rand(60, 220);
+      S.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, rgb });
     }
+  }
+
+  function ring(x, y, rgb) {
+    S.rings.push({ x, y, r: 6, life: 1, rgb });
+  }
+
+  function popup(x, y, text, color, size) {
+    S.popups.push({ x, y, text, color, size: size || 16, life: 1 });
+  }
+
+  function endGame() {
+    S.over = true;
+    keys.f = false;
+    dragX = null;
+    finishRound(id, S.score);
+    showOver();
   }
 
   function update(dt) {
     const step = dt * 60;
-    if (keys.l) ship.x -= ship.speed * step;
-    if (keys.r) ship.x += ship.speed * step;
-    ship.x = clamp(ship.x, 24, W - 24);
+    const sh = S.ship;
+    if (keys.l) sh.x -= sh.speed * step;
+    if (keys.r) sh.x += sh.speed * step;
+    if (dragX !== null) sh.x += (dragX - sh.x) * Math.min(1, dt * 14);
+    sh.x = clamp(sh.x, 24, W - 24);
 
-    fireCD -= dt;
-    if (keys.f && fireCD <= 0) {
-      bullets.push({ x: ship.x, y: ship.y - 20, vy: -9 });
-      fireCD = 0.22;
+    S.t += dt;
+    S.fireCD -= dt;
+    S.inv = Math.max(0, S.inv - dt);
+    if (keys.f && S.fireCD <= 0) {
+      S.bullets.push({ x: sh.x, y: sh.y - 20, vy: -9 });
+      S.fireCD = 0.22;
       Sound.shoot();
     }
+    for (const b of S.bullets) b.y += b.vy * step;
+    S.bullets = S.bullets.filter(b => b.y > -10);
 
-    bullets.forEach(b => b.y += b.vy * step);
-    bullets = bullets.filter(b => b.y > -10);
+    S.enemyTimer -= dt;
+    const interval = Math.max(0.35, 1.2 - S.wave * 0.08);
+    if (S.enemyTimer <= 0) { spawnEnemy(); S.enemyTimer = interval; }
 
-    enemyTimer -= dt;
-    const interval = Math.max(0.35, 1.2 - wave * 0.08);
-    if (enemyTimer <= 0) { spawnEnemy(); enemyTimer = interval; }
-
-    enemies.forEach(e => {
+    for (const e of S.enemies) {
       e.y += e.vy * step;
       e.x += e.vx * step;
+      e.phase += dt * 3;
       if (e.x < 20 || e.x > W - 20) e.vx *= -1;
-    });
+    }
 
-    // bullet vs enemy
-    for (const b of bullets) {
-      for (const e of enemies) {
+    // Bullet vs enemy
+    for (const b of S.bullets) {
+      for (const e of S.enemies) {
         if (e.hp > 0 && Math.abs(b.x - e.x) < e.size / 2 + 3 && Math.abs(b.y - e.y) < e.size / 2 + 4) {
-          e.hp = 0; b.y = -999;
-          burst(e.x, e.y, e.hue);
+          e.hp = 0;
+          b.y = -999;
+          burst(e.x, e.y, e.rgb, 18);
+          ring(e.x, e.y, e.rgb);
           Sound.boom();
-          score += e.kind === 2 ? 50 : 20;
-          setScore(score);
-          if (score >= wave * 300) { wave++; toast(`🚀 Wave ${wave}!`); }
+          const pts = e.kind === 2 ? 50 : 20;
+          S.score += pts;
+          popup(e.x, e.y, '+' + pts, '#eae6ff', 14);
+          setScore(S.score);
+          if (S.score >= S.wave * 300) {
+            S.wave++;
+            popup(W / 2, H * 0.42, 'WAVE ' + S.wave, '#00c8ff', 30);
+            toast('🚀 Wave ' + S.wave + '!');
+          }
         }
       }
     }
-    enemies = enemies.filter(e => e.hp > 0 && e.y < H + 40);
+    S.enemies = S.enemies.filter(e => e.hp > 0 && e.y < H + 40);
 
-    // enemy vs ship
-    for (const e of enemies) {
-      if (Math.abs(e.x - ship.x) < e.size / 2 + ship.w / 2 - 6 &&
-          Math.abs(e.y - ship.y) < e.size / 2 + ship.h / 2 - 6) {
-        e.hp = 0;
-        burst(e.x, e.y, '#ff2e7e');
-        lives--;
-        Sound.bad();
-        if (lives <= 0) return endGame();
+    // Enemy vs ship
+    if (S.inv <= 0) {
+      for (const e of S.enemies) {
+        if (Math.abs(e.x - sh.x) < e.size / 2 + sh.w / 2 - 6 &&
+            Math.abs(e.y - sh.y) < e.size / 2 + sh.h / 2 - 6) {
+          e.hp = 0;
+          burst(e.x, e.y, '255,46,126', 24);
+          ring(e.x, e.y, '255,46,126');
+          S.lives--;
+          S.inv = 1.2;
+          S.shake = 10;
+          Sound.bad();
+          if (S.lives <= 0) { endGame(); return; }
+          break;
+        }
       }
     }
-    enemies = enemies.filter(e => e.hp > 0);
-
-    particles.forEach(p => { p.x += p.vx * step; p.y += p.vy * step; p.life -= 0.03 * step; });
-    particles = particles.filter(p => p.life > 0);
-    stars.forEach(s => { s.y += s.s * step; if (s.y > H) { s.y = 0; s.x = Math.random() * W; } });
+    S.enemies = S.enemies.filter(e => e.hp > 0);
   }
 
-  function endGame() {
-    over = true; running = false;
-    cancelAnimationFrame(raf);
-    finishRound(id, score);
-    keys.f = false;
-    render();
-    showOverlay('MISSION FAILED', `Final score: ${score}. Press Restart to launch again.`, 'Restart', restart);
+  function updateFx(dt) {
+    for (const p of S.parts) {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 0.96; p.vy *= 0.96;
+      p.life -= dt * 1.8;
+    }
+    S.parts = S.parts.filter(p => p.life > 0);
+    for (const r of S.rings) { r.r += dt * 160; r.life -= dt * 2.2; }
+    S.rings = S.rings.filter(r => r.life > 0);
+    for (const p of S.popups) { p.y -= dt * 40; p.life -= dt * 1.1; }
+    S.popups = S.popups.filter(p => p.life > 0);
+    S.shake *= Math.exp(-dt * 8);
+    if (S.shake < 0.05) S.shake = 0;
+    for (const s of stars) {
+      s.y += (20 + s.layer * 25) * dt;
+      if (s.y > H) { s.y = 0; s.x = Math.random() * W; }
+    }
   }
 
   function drawShip() {
-    ctx.save();
-    ctx.translate(ship.x, ship.y);
-    ctx.shadowColor = '#00c8ff'; ctx.shadowBlur = 18;
-    ctx.fillStyle = '#00c8ff';
+    const sh = S.ship;
+    if (S.inv > 0 && Math.floor(S.inv * 12) % 2 === 0) return;  // blink while invulnerable
+    const x = sh.x, y = sh.y;
+    const fl = 14 + Math.random() * 6 + (keys.f ? 4 : 0);
+    ctx.globalCompositeOperation = 'lighter';
+    const tg = ctx.createLinearGradient(0, y + 8, 0, y + 8 + fl);
+    tg.addColorStop(0, 'rgba(0,200,255,.9)');
+    tg.addColorStop(1, 'rgba(176,38,255,0)');
+    ctx.fillStyle = tg;
     ctx.beginPath();
-    ctx.moveTo(0, -20); ctx.lineTo(20, 16); ctx.lineTo(0, 8); ctx.lineTo(-20, 16); ctx.closePath();
-    ctx.fill();
+    ctx.moveTo(x - 6, y + 8); ctx.lineTo(x, y + 8 + fl); ctx.lineTo(x + 6, y + 8);
+    ctx.closePath(); ctx.fill();
+    ctx.drawImage(glowCyan, x - 32, y - 26, 64, 64);
+    ctx.globalCompositeOperation = 'source-over';
+
+    const hg = ctx.createLinearGradient(0, y - 20, 0, y + 16);
+    hg.addColorStop(0, '#eaffff');
+    hg.addColorStop(0.5, '#00c8ff');
+    hg.addColorStop(1, '#0055ff');
+    ctx.fillStyle = hg;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 20); ctx.lineTo(x + 20, y + 16); ctx.lineTo(x, y + 8); ctx.lineTo(x - 20, y + 16);
+    ctx.closePath(); ctx.fill();
+
     ctx.fillStyle = '#b026ff';
-    ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
+    ctx.beginPath();
+    ctx.moveTo(x - 6, y + 2); ctx.lineTo(x - 22, y + 18); ctx.lineTo(x - 8, y + 14);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 6, y + 2); ctx.lineTo(x + 22, y + 18); ctx.lineTo(x + 8, y + 14);
+    ctx.closePath(); ctx.fill();
+
+    ctx.fillStyle = 'rgba(10,6,25,.85)';
+    ctx.beginPath(); ctx.ellipse(x, y - 4, 4, 7, 0, 0, TWO_PI); ctx.fill();
   }
 
-  function render() {
-    ctx.fillStyle = '#05030d';
-    ctx.fillRect(0, 0, W, H);
+  function draw() {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.save();
+    if (S.shake > 0.3) ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
+
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(-12, -12, W + 24, H + 24);
+
+    // Parallax starfield
     ctx.fillStyle = '#eae6ff';
-    stars.forEach(s => { ctx.globalAlpha = 0.4 + s.s * 0.2; ctx.fillRect(s.x, s.y, s.s, s.s); });
+    for (const s of stars) {
+      ctx.globalAlpha = 0.25 + s.layer * 0.25;
+      ctx.fillRect(s.x, s.y, s.s, s.s);
+    }
     ctx.globalAlpha = 1;
 
-    // bullets
-    ctx.save();
-    ctx.shadowColor = '#b026ff'; ctx.shadowBlur = 12; ctx.fillStyle = '#e27bff';
-    bullets.forEach(b => ctx.fillRect(b.x - 2, b.y, 4, 14));
-    ctx.restore();
+    // Bullets
+    ctx.globalCompositeOperation = 'lighter';
+    for (const b of S.bullets) ctx.drawImage(glowPurple, b.x - 14, b.y - 8, 28, 28);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#f3d6ff';
+    for (const b of S.bullets) ctx.fillRect(b.x - 1.5, b.y, 3, 12);
 
-    // enemies
-    enemies.forEach(e => {
-      ctx.save();
-      ctx.shadowColor = e.hue; ctx.shadowBlur = 16;
+    // Enemies
+    for (const e of S.enemies) {
+      const cx = e.x, cy = e.y + Math.sin(e.phase) * 2, sz = e.size;
+      ctx.globalCompositeOperation = 'lighter';
+      const g = e.kind === 2 ? glowPink : glowGreen;
+      ctx.drawImage(g, cx - sz * 1.3, cy - sz * 1.3, sz * 2.6, sz * 2.6);
+      ctx.globalCompositeOperation = 'source-over';
       ctx.fillStyle = e.hue;
       ctx.beginPath();
-      ctx.moveTo(e.x, e.y + e.size / 2);
-      ctx.lineTo(e.x + e.size / 2, e.y - e.size / 2);
-      ctx.lineTo(e.x, e.y - e.size / 4);
-      ctx.lineTo(e.x - e.size / 2, e.y - e.size / 2);
+      ctx.moveTo(cx, cy + sz / 2);
+      ctx.lineTo(cx + sz / 2, cy - sz / 2);
+      ctx.lineTo(cx, cy - sz / 4);
+      ctx.lineTo(cx - sz / 2, cy - sz / 2);
       ctx.closePath(); ctx.fill();
-      ctx.restore();
-    });
-
-    // particles
-    particles.forEach(p => {
-      ctx.globalAlpha = Math.max(0, p.life);
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x, p.y, 3, 3);
-    });
-    ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(255,255,255,.8)';
+      ctx.beginPath(); ctx.arc(cx, cy, sz * 0.09, 0, TWO_PI); ctx.fill();
+    }
 
     drawShip();
 
-    // HUD
-    ctx.fillStyle = '#eae6ff';
+    // Explosions
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of S.parts) {
+      ctx.fillStyle = `rgba(${p.rgb},${Math.max(0, p.life)})`;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.lineWidth = 2;
+    for (const r of S.rings) {
+      ctx.strokeStyle = `rgba(${r.rgb},${Math.max(0, r.life) * 0.9})`;
+      ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, TWO_PI); ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Popups
+    ctx.textAlign = 'center';
+    for (const p of S.popups) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+      ctx.fillStyle = p.color;
+      ctx.font = `bold ${p.size}px Segoe UI, Arial`;
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+
+    // HUD bar
+    const hud = ctx.createLinearGradient(0, 0, 0, 44);
+    hud.addColorStop(0, 'rgba(5,3,13,.85)');
+    hud.addColorStop(1, 'rgba(5,3,13,0)');
+    ctx.fillStyle = hud;
+    ctx.fillRect(0, 0, W, 44);
     ctx.font = 'bold 16px Segoe UI, Arial';
-    ctx.fillText(`Wave ${wave}`, 12, 22);
-    for (let i = 0; i < lives; i++) {
-      ctx.fillStyle = '#ff2e7e';
-      ctx.fillRect(W - 24 - i * 22, 10, 16, 10);
+    ctx.fillStyle = '#00c8ff';
+    ctx.fillText('SCORE ' + S.score, 14, 27);
+    ctx.fillStyle = '#eae6ff';
+    ctx.textAlign = 'center';
+    ctx.fillText('WAVE ' + S.wave, W / 2, 27);
+    ctx.textAlign = 'left';
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = i < S.lives ? '#ff2e7e' : 'rgba(255,255,255,.18)';
+      heartPath(ctx, W - 40 - i * 26, 22, 8);
+    }
+
+    ctx.restore();
+  }
+
+  function frame(t) {
+    raf = 0;
+    if (destroyed) return;
+    const dt = Math.min(0.033, (t - last) / 1000);
+    last = t;
+    if (!S.over) update(dt);
+    updateFx(dt);
+    draw();
+    if (!S.over || S.parts.length || S.rings.length || S.popups.length || S.shake > 0) {
+      raf = requestAnimationFrame(frame);
     }
   }
 
-  function loop(t) {
-    if (!running) return;
-    const dt = Math.min(0.05, (t - last) / 1000);
-    last = t;
-    update(dt);
-    if (running) { render(); raf = requestAnimationFrame(loop); }
+  function kick() {
+    if (raf || destroyed) return;
+    last = performance.now();
+    raf = requestAnimationFrame(frame);
   }
 
-  function showOverlay(title, body, label, cb) {
-    const stage = $('#stage > div');
+  function showOver() {
+    const wrap = $('#shWrap');
     const div = document.createElement('div');
-    div.innerHTML = overlayHTML(title, body, label, 'shBtn');
-    const ov = div.firstElementChild;
-    ov.style.position = 'absolute';
-    ov.style.inset = '0';
-    stage.style.position = 'relative';
-    stage.appendChild(ov);
-    $('#shBtn').onclick = cb;
-  }
-  function restart() {
-    const ov = $('#stage .overlay'); if (ov) ov.remove();
-    reset();
+    div.innerHTML = overlayHTML('MISSION FAILED', `Final score: ${S.score}. Press Restart to launch again.`, '↻ Restart', 'shBtn');
+    overlayEl = div.firstElementChild;
+    overlayEl.style.position = 'absolute';
+    overlayEl.style.inset = '0';
+    wrap.appendChild(overlayEl);
+    $('#shBtn').onclick = restart;
   }
 
-  const onKey = (e) => {
-    const down = e.type === 'keydown';
-    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') { keys.l = down; e.preventDefault(); }
-    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') { keys.r = down; e.preventDefault(); }
-    if (e.key === ' ') { keys.f = down; e.preventDefault(); if (down && over) restart(); }
+  // ----- Input -----
+  const onKeyDown = e => {
+    const k = e.key;
+    if (k === 'ArrowLeft' || k === 'a' || k === 'A') { keys.l = true; e.preventDefault(); }
+    else if (k === 'ArrowRight' || k === 'd' || k === 'D') { keys.r = true; e.preventDefault(); }
+    else if (k === ' ') {
+      e.preventDefault();
+      if (S && S.over) restart();
+      else keys.f = true;
+    }
+    else if (k === 'Enter' && S && S.over) { e.preventDefault(); restart(); }
   };
-  window.addEventListener('keydown', onKey);
-  window.addEventListener('keyup', onKey);
-
-  const hold = (btn, k) => {
-    const on = (e) => { e.preventDefault(); keys[k] = true; };
-    const off = (e) => { e.preventDefault(); keys[k] = false; };
-    btn.addEventListener('touchstart', on, { passive: false });
-    btn.addEventListener('touchend', off);
-    btn.addEventListener('touchcancel', off);
-    btn.addEventListener('mousedown', on);
-    btn.addEventListener('mouseup', off);
-    btn.addEventListener('mouseleave', off);
+  const onKeyUp = e => {
+    const k = e.key;
+    if (k === 'ArrowLeft' || k === 'a' || k === 'A') keys.l = false;
+    else if (k === 'ArrowRight' || k === 'd' || k === 'D') keys.r = false;
+    else if (k === ' ') keys.f = false;
   };
-  hold($('#shL'), 'l');
-  hold($('#shR'), 'r');
-  hold($('#shF'), 'f');
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
 
-  reset();
+  const hold = (sel, k) => {
+    const b = $(sel);
+    const on = e => { e.preventDefault(); keys[k] = true; };
+    const off = e => { e.preventDefault(); keys[k] = false; };
+    b.addEventListener('pointerdown', on);
+    b.addEventListener('pointerup', off);
+    b.addEventListener('pointerleave', off);
+    b.addEventListener('pointercancel', off);
+  };
+  hold('#shL', 'l');
+  hold('#shR', 'r');
+  hold('#shF', 'f');
+
+  // Drag anywhere on the canvas to move the ship (touch or mouse)
+  const toX = e => {
+    const r = cv.getBoundingClientRect();
+    return (e.clientX - r.left) / r.width * W;
+  };
+  cv.addEventListener('pointerdown', e => {
+    cv.setPointerCapture(e.pointerId);
+    dragX = toX(e);
+  });
+  cv.addEventListener('pointermove', e => {
+    if (dragX !== null) dragX = toX(e);
+  });
+  const endDrag = () => { dragX = null; };
+  cv.addEventListener('pointerup', endDrag);
+  cv.addEventListener('pointercancel', endDrag);
+
+  resetGame();
 
   return {
     destroy() {
-      running = false;
+      destroyed = true;
       cancelAnimationFrame(raf);
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('keyup', onKey);
+      raf = 0;
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
     }
   };
 }
+
 
 /* ============================================================
    GAME 5: MEMORY CARD GAME
