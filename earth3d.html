@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SIVA GAMING HUB | 3D Earth</title>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      overflow-x: hidden;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      background: #030711;
+    }
+
+    #space {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 22px 7%;
+    }
+
+    .logo {
+      font-size: 1.2rem;
+      font-weight: 800;
+      letter-spacing: 2px;
+    }
+
+    .logo span { color: #53c8ff; }
+
+    .status {
+      color: #9bdcff;
+      font-size: 0.8rem;
+      letter-spacing: 1px;
+    }
+
+    main {
+      min-height: 78vh;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+      gap: 20px;
+      padding: 20px 7% 60px;
+    }
+
+    .content { max-width: 560px; }
+
+    .eyebrow {
+      color: #6bd4ff;
+      font-size: 0.8rem;
+      letter-spacing: 4px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      font-size: clamp(2.8rem, 6vw, 5.8rem);
+      line-height: 0.95;
+      margin-bottom: 24px;
+    }
+
+    h1 span {
+      color: #64cfff;
+      text-shadow: 0 0 30px #168bd866;
+    }
+
+    .description {
+      color: #b8c6df;
+      line-height: 1.8;
+      max-width: 440px;
+      margin-bottom: 28px;
+    }
+
+    .button {
+      display: inline-block;
+      padding: 14px 24px;
+      border: 1px solid #62cfff;
+      border-radius: 30px;
+      color: #fff;
+      text-decoration: none;
+      font-weight: bold;
+      background: #0c7bb52b;
+      transition: 0.25s;
+    }
+
+    .button:hover {
+      background: #168acb;
+      box-shadow: 0 0 25px #168acb88;
+      transform: translateY(-2px);
+    }
+
+    #earth-wrap {
+      height: min(68vw, 540px);
+      min-height: 300px;
+      position: relative;
+    }
+
+    #earth-wrap::after {
+      content: "DRAG TO ROTATE";
+      position: absolute;
+      bottom: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #8bb8d8;
+      font-size: 0.7rem;
+      letter-spacing: 3px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    footer {
+      padding: 20px 7%;
+      color: #71839e;
+      font-size: 0.75rem;
+      letter-spacing: 1px;
+      border-top: 1px solid #ffffff12;
+    }
+
+    @media (max-width: 760px) {
+      header { padding: 20px 6%; }
+      main {
+        grid-template-columns: 1fr;
+        text-align: center;
+        padding: 35px 6%;
+      }
+      .content { margin: auto; }
+      .description { margin-left: auto; margin-right: auto; }
+      #earth-wrap {
+        grid-row: 1;
+        height: 85vw;
+        min-height: 280px;
+      }
+      .status { display: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="space"></canvas>
+
+  <header>
+    <div class="logo">SIVA <span>GAMING HUB</span></div>
+    <div class="status">● 3D EARTH EXPERIENCE</div>
+  </header>
+
+  <main>
+    <section class="content">
+      <p class="eyebrow">WELCOME TO THE FUTURE</p>
+      <h1>EXPLORE<br>THE <span>EARTH.</span></h1>
+      <p class="description">
+        A new world of gaming begins here. Explore the planet,
+        discover new places, and get ready for your next adventure.
+      </p>
+      <a class="button" href="#earth-wrap">EXPLORE THE GLOBE ↗</a>
+    </section>
+
+    <div id="earth-wrap" aria-label="Interactive 3D Earth"></div>
+  </main>
+
+  <footer>© SIVA GAMING HUB — EXPLORE • PLAY • REPEAT</footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script>
+    const container = document.getElementById("earth-wrap");
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(
+      45,
+      container.clientWidth / container.clientHeight,
+      0.1,
+      100
+    );
+    camera.position.z = 3.2;
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+
+    const sunlight = new THREE.DirectionalLight(0xffffff, 2);
+    sunlight.position.set(5, 3, 5);
+    scene.add(sunlight);
+
+    const earthGroup = new THREE.Group();
+    scene.add(earthGroup);
+
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.load(
+      "https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg",
+      function (texture) {
+        const earth = new THREE.Mesh(
+          new THREE.SphereGeometry(1, 64, 64),
+          new THREE.MeshStandardMaterial({
+            map: texture,
+            roughness: 1
+          })
+        );
+        earthGroup.add(earth);
+      }
+    );
+
+    const glow = new THREE.Mesh(
+      new THREE.SphereGeometry(1.06, 64, 64),
+      new THREE.MeshBasicMaterial({
+        color: 0x168bff,
+        transparent: true,
+        opacity: 0.12,
+        side: THREE.BackSide
+      })
+    );
+    earthGroup.add(glow);
+
+    // Star field
+    const starGeometry = new THREE.BufferGeometry();
+    const starPositions = [];
+
+    for (let i = 0; i < 1400; i++) {
+      starPositions.push(
+        (Math.random() - 0.5) * 30,
+        (Math.random() - 0.5) * 30,
+        (Math.random() - 0.5) * 30
+      );
+    }
+
+    starGeometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(starPositions, 3)
+    );
+
+    const stars = new THREE.Points(
+      starGeometry,
+      new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 0.025
+      })
+    );
+    scene.add(stars);
+
+    // Drag to rotate
+    let dragging = false;
+    let previousX = 0;
+    let previousY = 0;
+    let rotationSpeed = 0.002;
+
+    container.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      previousX = event.clientX;
+      previousY = event.clientY;
+      container.setPointerCapture(event.pointerId);
+    });
+
+    container.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+
+      const deltaX = event.clientX - previousX;
+      const deltaY = event.clientY - previousY;
+
+      earthGroup.rotation.y += deltaX * 0.005;
+      earthGroup.rotation.x += deltaY * 0.005;
+
+      previousX = event.clientX;
+      previousY = event.clientY;
+    });
+
+    function stopDragging() {
+      dragging = false;
+    }
+
+    container.addEventListener("pointerup", stopDragging);
+    container.addEventListener("pointercancel", stopDragging);
+    container.addEventListener("pointerleave", stopDragging);
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (!dragging) {
+        earthGroup.rotation.y += rotationSpeed;
+      }
+
+      stars.rotation.y += 0.00015;
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    window.addEventListener("resize", () => {
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+    });
+  </script>
+</body>
+</html>
